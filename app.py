@@ -9,15 +9,15 @@ app = Flask(__name__)
 app.secret_key = "secret123"
 
 # 🔐 2CHAT CONFIG
-API_KEY_2CHAT = "TU_API_KEY"
+API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
 URL_2CHAT = "https://api.2chat.co/v1/message/send"
 
 # 🔌 DB CONFIG
 DB_CONFIG = {
-    "host": "database-1.czao0sewwhuc.us-east-2.rds.amazonaws.com",
-    "user": "admin",
-    "password": "Motosur2025",
-    "database": "loyalty"
+    "host": os.environ.get("DB_HOST"),
+    "user": os.environ.get("DB_USER"),
+    "password": os.environ.get("DB_PASSWORD"),
+    "database": os.environ.get("DB_NAME")
 }
 
 def get_db():
@@ -228,7 +228,9 @@ def scan():
 def register_purchase():
     data = request.json
 
-    phone = data["phone"]
+    phone = data.get("phone")
+    if not phone:
+        return jsonify({"error": "phone requerido"})
     branch_id = data["branch_id"]
     code = data["code"]
 
