@@ -1,0 +1,13 @@
+flask
+gunicorn
+requests
+datetime
+pandas
+pymysql
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+bs4
+lxml
+mysql-connector-python
