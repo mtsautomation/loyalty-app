@@ -24,10 +24,26 @@ def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
 # -------------------------
+# 📱 NORMALIZE PHONE
+# -------------------------
+def normalize_phone(phone):
+    phone = phone.replace("+", "").replace(" ", "").strip()
+
+    if phone.startswith("52") and len(phone) == 12:
+        return phone
+
+    if len(phone) == 10:
+        return "52" + phone
+
+    return phone
+
+# -------------------------
 # 📲 SEND WHATSAPP
 # -------------------------
 def send_whatsapp(phone, message):
     try:
+        phone = normalize_phone(phone)
+
         payload = {
             "to": phone,
             "message": message
@@ -39,7 +55,8 @@ def send_whatsapp(phone, message):
         }
 
         res = requests.post(URL_2CHAT, json=payload, headers=headers)
-        print("📤 WhatsApp:", res.text)
+
+        print("📤 WhatsApp:", res.status_code, res.text)
 
     except Exception as e:
         print("❌ Error WhatsApp:", str(e))
@@ -47,7 +64,6 @@ def send_whatsapp(phone, message):
 # -------------------------
 # HELPERS
 # -------------------------
-
 def get_customer(cursor, phone):
     cursor.execute("SELECT * FROM customers WHERE phone=%s", (phone,))
     return cursor.fetchone()
@@ -96,7 +112,6 @@ def create_reward(cursor, conn, customer_id):
 # -------------------------
 # 🔐 ACTIVE CODE
 # -------------------------
-
 @app.route("/get_active_code")
 def get_active_code():
     branch_id = request.args.get("branch")
@@ -144,7 +159,6 @@ def get_active_code():
 # -------------------------
 # 💻 CASHIER
 # -------------------------
-
 @app.route("/cashier")
 def cashier():
     branch_id = request.args.get("branch")
@@ -189,7 +203,6 @@ def cashier():
 # -------------------------
 # 📱 SCAN
 # -------------------------
-
 @app.route("/scan")
 def scan():
     branch_id = request.args.get("branch")
@@ -223,16 +236,16 @@ def scan():
 # -------------------------
 # 🛒 PURCHASE + WHATSAPP
 # -------------------------
-
 @app.route("/register_purchase", methods=["POST"])
 def register_purchase():
     data = request.json
 
-    phone = data.get("phone")
-    if not phone:
-        return jsonify({"error": "phone requerido"})
-    branch_id = data["branch_id"]
-    code = data["code"]
+    phone = normalize_phone(data.get("phone"))
+    branch_id = data.get("branch_id")
+    code = data.get("code")
+
+    if not phone or not branch_id or not code:
+        return jsonify({"error": "faltan datos"})
 
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -259,17 +272,19 @@ def register_purchase():
     return jsonify({"total_purchases": total})
 
 # -------------------------
-# 📩 WEBHOOK 2CHAT
+# 📩 WEBHOOK 2CHAT (FIXED)
 # -------------------------
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
     print("📩 Incoming:", data)
 
     try:
-        phone = data.get("from")
-        text = data.get("text", "").lower()
+        phone = normalize_phone(data.get("remote_phone_number"))
+        text = data.get("message", {}).get("text", "").lower()
+
+        if not phone:
+            return jsonify({"reply": "Error leyendo número"})
 
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
@@ -277,29 +292,28 @@ def webhook():
         customer = get_customer(cursor, phone)
 
         if not customer:
-            return jsonify({"reply": "No estás registrado aún 😅"})
+            return jsonify({
+                "reply": "Aún no estás registrado 😅\nEscanea el QR en tienda para comenzar ☕"
+            })
 
-        customer_id = customer["id"]
-        total = count_purchases(cursor, customer_id)
+        total = count_purchases(cursor, customer["id"])
 
         if "status" in text or "puntos" in text:
-            return jsonify({"reply": f"Tienes {total} cafés ☕"})
+            return jsonify({"reply": f"☕ Llevas {total} cafés acumulados"})
 
         return jsonify({"reply": "Escribe *status* para ver tus cafés ☕"})
 
     except Exception as e:
-        print("❌ Error:", str(e))
+        print("❌ Error webhook:", str(e))
         return jsonify({"error": str(e)})
 
 # -------------------------
 # 🔐 LOGIN OWNER
 # -------------------------
-
 @app.route("/login", methods=["GET","POST"])
 def login():
-
     if request.method == "POST":
-        phone = request.form["phone"]
+        phone = normalize_phone(request.form["phone"])
 
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
@@ -322,7 +336,6 @@ def login():
 # -------------------------
 # 📊 DASHBOARD
 # -------------------------
-
 @app.route("/dashboard")
 def dashboard():
 
@@ -363,6 +376,5 @@ def dashboard():
 # -------------------------
 # RUN
 # -------------------------
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
