@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 # 🔐 2CHAT CONFIG
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-URL_2CHAT = "https://api.2chat.co/v1/message/send"
+URL_2CHAT = "https://api.p.2chat.io/open/whatsapp/send-message"
 
 # 🔌 DB CONFIG
 DB_CONFIG = {
@@ -44,21 +44,26 @@ def normalize_phone(phone):
 # -------------------------
 def send_whatsapp(phone, message):
     try:
+        if not API_KEY_2CHAT:
+            print("❌ API KEY NO CONFIGURADA")
+            return
+
         phone = normalize_phone(phone)
 
         payload = {
-            "to": phone,
+            "to_number": phone,
             "message": message
         }
 
         headers = {
-            "Authorization": f"Bearer {API_KEY_2CHAT}",
+            "X-User-API-Key": API_KEY_2CHAT,
             "Content-Type": "application/json"
         }
 
         res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=10)
 
-        print("📤 WhatsApp:", res.status_code, res.text)
+        print("📤 WhatsApp STATUS:", res.status_code)
+        print("📤 WhatsApp RESPONSE:", res.text)
 
     except Exception as e:
         print("❌ Error WhatsApp:", str(e))
