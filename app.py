@@ -27,9 +27,12 @@ def get_db():
 # 📱 NORMALIZE PHONE
 # -------------------------
 def normalize_phone(phone):
+    if not phone:
+        return None
+
     phone = phone.replace("+", "").replace(" ", "").strip()
 
-    if phone.startswith("52") and len(phone) == 12:
+    if phone.startswith("52") and len(phone) >= 12:
         return phone
 
     if len(phone) == 10:
@@ -54,7 +57,7 @@ def send_whatsapp(phone, message):
             "Content-Type": "application/json"
         }
 
-        res = requests.post(URL_2CHAT, json=payload, headers=headers)
+        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=10)
 
         print("📤 WhatsApp:", res.status_code, res.text)
 
@@ -119,49 +122,50 @@ def get_active_code():
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
-        DELETE FROM cashier_codes 
-        WHERE branch_id=%s AND expires_at < NOW()
-    """, (branch_id,))
+    try:
+        cursor.execute("""
+            DELETE FROM cashier_codes 
+            WHERE branch_id=%s AND expires_at < NOW()
+        """, (branch_id,))
 
-    cursor.execute("""
-        SELECT code, expires_at FROM cashier_codes
-        WHERE branch_id=%s ORDER BY id DESC LIMIT 1
-    """, (branch_id,))
+        cursor.execute("""
+            SELECT code, expires_at FROM cashier_codes
+            WHERE branch_id=%s ORDER BY id DESC LIMIT 1
+        """, (branch_id,))
 
-    result = cursor.fetchone()
+        result = cursor.fetchone()
 
-    if result:
-        cursor.close()
-        conn.close()
+        if result:
+            return jsonify({
+                "code": result["code"],
+                "expires_at": result["expires_at"].isoformat()
+            })
+
+        code = str(random.randint(1000, 9999))
+        expires_at = datetime.now() + timedelta(seconds=30)
+
+        cursor.execute("""
+            INSERT INTO cashier_codes (code, branch_id, expires_at)
+            VALUES (%s, %s, %s)
+        """, (code, branch_id, expires_at))
+
+        conn.commit()
+
         return jsonify({
-            "code": result["code"],
-            "expires_at": result["expires_at"].strftime("%Y-%m-%dT%H:%M:%S")
+            "code": code,
+            "expires_at": expires_at.isoformat()
         })
 
-    code = str(random.randint(1000, 9999))
-    expires_at = datetime.now() + timedelta(seconds=30)
-
-    cursor.execute("""
-        INSERT INTO cashier_codes (code, branch_id, expires_at)
-        VALUES (%s, %s, %s)
-    """, (code, branch_id, expires_at))
-
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    return jsonify({
-        "code": code,
-        "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%S")
-    })
+    finally:
+        cursor.close()
+        conn.close()
 
 # -------------------------
 # 💻 CASHIER
 # -------------------------
 @app.route("/cashier")
 def cashier():
-    branch_id = request.args.get("branch")
+    branch_id = request.args.get("branch", 1)
 
     return render_template_string(f"""
     <h1>Código activo</h1>
@@ -176,27 +180,34 @@ def cashier():
             .then(r => r.json())
             .then(d => {{
                 document.getElementById("code").innerText = d.code;
+
                 expiresAt = new Date(d.expires_at);
+
+                console.log("EXPIRES:", expiresAt);
             }});
         }}
 
         function tick() {{
             if (!expiresAt) return;
 
-            const diff = Math.floor((expiresAt - new Date())/1000);
+            const now = new Date();
+            const diff = Math.floor((expiresAt - now) / 1000);
 
-            if (diff <= 0) return fetchCode();
+            if (diff <= 0) {{
+                fetchCode();
+                return;
+            }}
 
-            const m = Math.floor(diff/60);
+            const m = Math.floor(diff / 60);
             const s = diff % 60;
 
             document.getElementById("countdown").innerText =
-                m + ":" + String(s).padStart(2,"0");
+                "Renueva en: " + m + ":" + String(s).padStart(2, "0");
         }}
 
         fetchCode();
-        setInterval(tick,1000);
-        setInterval(fetchCode,30000);
+        setInterval(tick, 1000);
+        setInterval(fetchCode, 30000);
     </script>
     """)
 
@@ -250,29 +261,31 @@ def register_purchase():
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
 
-    if not validate_code(cursor, code, branch_id):
-        return jsonify({"error":"Código inválido"})
+    try:
+        if not validate_code(cursor, code, branch_id):
+            return jsonify({"error":"Código inválido"})
 
-    customer = get_customer(cursor, phone)
-    customer_id = create_customer(cursor, conn, phone) if not customer else customer["id"]
+        customer = get_customer(cursor, phone)
+        customer_id = create_customer(cursor, conn, phone) if not customer else customer["id"]
 
-    create_purchase(cursor, conn, customer_id, branch_id)
+        create_purchase(cursor, conn, customer_id, branch_id)
 
-    total = count_purchases(cursor, customer_id)
+        total = count_purchases(cursor, customer_id)
 
-    if total % 9 == 0:
-        create_reward(cursor, conn, customer_id)
-        send_whatsapp(phone, "🎉 ¡Tienes un café gratis!")
-    else:
-        send_whatsapp(phone, f"☕ Llevas {total} cafés acumulados")
+        if total % 9 == 0:
+            create_reward(cursor, conn, customer_id)
+            send_whatsapp(phone, "🎉 ¡Tienes un café gratis!")
+        else:
+            send_whatsapp(phone, f"☕ Llevas {total} cafés acumulados")
 
-    cursor.close()
-    conn.close()
+        return jsonify({"total_purchases": total})
 
-    return jsonify({"total_purchases": total})
+    finally:
+        cursor.close()
+        conn.close()
 
 # -------------------------
-# 📩 WEBHOOK 2CHAT (FIXED)
+# 📩 WEBHOOK 2CHAT
 # -------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -289,89 +302,28 @@ def webhook():
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
 
-        customer = get_customer(cursor, phone)
+        try:
+            customer = get_customer(cursor, phone)
 
-        if not customer:
-            return jsonify({
-                "reply": "Aún no estás registrado 😅\nEscanea el QR en tienda para comenzar ☕"
-            })
+            if not customer:
+                return jsonify({
+                    "reply": "Aún no estás registrado 😅\nEscanea el QR en tienda"
+                })
 
-        total = count_purchases(cursor, customer["id"])
+            total = count_purchases(cursor, customer["id"])
 
-        if "status" in text or "puntos" in text:
-            return jsonify({"reply": f"☕ Llevas {total} cafés acumulados"})
+            if "status" in text or "puntos" in text:
+                return jsonify({"reply": f"☕ Llevas {total} cafés acumulados"})
 
-        return jsonify({"reply": "Escribe *status* para ver tus cafés ☕"})
+            return jsonify({"reply": "Escribe *status* para ver tus cafés ☕"})
+
+        finally:
+            cursor.close()
+            conn.close()
 
     except Exception as e:
         print("❌ Error webhook:", str(e))
         return jsonify({"error": str(e)})
-
-# -------------------------
-# 🔐 LOGIN OWNER
-# -------------------------
-@app.route("/login", methods=["GET","POST"])
-def login():
-    if request.method == "POST":
-        phone = normalize_phone(request.form["phone"])
-
-        conn = get_db()
-        cursor = conn.cursor(dictionary=True)
-
-        business = get_business_by_owner(cursor, phone)
-
-        if business:
-            session["business_id"] = business["id"]
-            return redirect("/dashboard")
-
-        return "No existe negocio"
-
-    return """
-    <form method="post">
-        <input name="phone" placeholder="Tu teléfono"/>
-        <button>Entrar</button>
-    </form>
-    """
-
-# -------------------------
-# 📊 DASHBOARD
-# -------------------------
-@app.route("/dashboard")
-def dashboard():
-
-    if "business_id" not in session:
-        return redirect("/login")
-
-    business_id = session["business_id"]
-
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT COUNT(DISTINCT c.id) as customers
-        FROM customers c
-        JOIN purchases p ON c.id = p.customer_id
-        JOIN branches b ON p.branch_id = b.id
-        WHERE b.business_id=%s
-    """, (business_id,))
-    customers = cursor.fetchone()["customers"]
-
-    cursor.execute("""
-        SELECT COUNT(*) as purchases
-        FROM purchases p
-        JOIN branches b ON p.branch_id = b.id
-        WHERE b.business_id=%s
-    """, (business_id,))
-    purchases = cursor.fetchone()["purchases"]
-
-    cursor.close()
-    conn.close()
-
-    return render_template_string(f"""
-    <h1>Dashboard</h1>
-    <h2>Clientes: {customers}</h2>
-    <h2>Compras: {purchases}</h2>
-    """)
 
 # -------------------------
 # RUN
