@@ -163,7 +163,7 @@ def redeem_reward(cursor, conn, reward_id):
     conn.commit()
 
 def closing():
-    return "\n\n👉 Para otra compra escribe *hola*"
+    return "\n\n👉 Para registrar otra compra escribe *hola*"
 
 # -------------------------
 # 🔐 ACTIVE CODE
@@ -236,13 +236,13 @@ def webhook():
             history = get_purchase_history(cursor, customer_id)
 
             if not rows:
-                response = "☕ Aún no tienes compras."
+                response = "☕ Aún no tienes compras acumuladas."
             else:
                 msg = "📊 Tus cafés:\n\n"
                 for r in rows:
                     msg += f"Sucursal {r['branch_id']}: {r['total']}\n"
 
-                msg += "\n🗓 Últimas compras:\n"
+                msg += "\n🗓 Tus últimas compras:\n"
                 for h in history:
                     msg += f"{h['day']} (Sucursal {h['branch_id']})\n"
 
@@ -275,7 +275,7 @@ def webhook():
             code_data = get_branch_by_code(cursor, text)
 
             if not code_data:
-                response = "❌ Código inválido o usado"
+                response = "❌ Lo sentimos el Código que enviasté es  inválido o ya ha sido usado :/"
             else:
                 branch_id = code_data["branch_id"]
 
@@ -286,21 +286,21 @@ def webhook():
 
                 if total % 9 == 0:
                     create_reward(cursor, conn, customer_id, branch_id)
-                    response = "🎉 Café gratis disponible. Escribe *redimir*" + closing()
+                    response = "🎉 Ya tienes un Café gratis disponible. Escribe *redimir* para recibir tu recompensa" + closing()
                 else:
                     faltan = 9 - (total % 9)
                     if faltan == 9:
                         faltan = 0
-                    response = f"☕ Llevas {total}. Te faltan {faltan}" + closing()
+                    response = f"☕ has registrado  {total} compras. Te faltan {faltan}" + closing()
 
         # RESET
         elif text == "hola":
             update_state(cursor, conn, customer_id, None)
-            response = """👋 Bienvenido
+            response = """👋 Bienvenido a el programa de recompensas
 
-Envía código de 4 dígitos
-
-Escribe *puntos* o *redimir*"""
+-Envía el código de 4 dígitos que te da tu cajero, para registrar tu compra 
+-Escribe *puntos* para conocer tus registros anteriores 
+-Escribe *redimir* para canjear tu recompensa """
 
         else:
             response = "Escribe *hola* para comenzar"
