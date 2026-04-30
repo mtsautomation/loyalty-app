@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 # 🔐 2CHAT CONFIG
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-URL_2CHAT = "https://api.2chat.co/v1/messaging/send/text"
+URL_2CHAT = "https://api.2chat.io/v1/messaging/send-text"
 FROM_NUMBER = "+529992922621"
 
 # 🔌 DB CONFIG
