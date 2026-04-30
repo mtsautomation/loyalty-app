@@ -91,7 +91,7 @@ def create_customer(cursor, conn, phone):
 
 def update_state(cursor, conn, customer_id, state):
     cursor.execute(
-        "UPDATE customers SET state=%s WHERE id=%s",
+        "UPDATE customers SET state=%s WHERE customer_id=%s",
         (state, customer_id)
     )
     conn.commit()
