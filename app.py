@@ -9,7 +9,8 @@ app = Flask(__name__)
 
 # 🔐 2CHAT CONFIG
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-URL_2CHAT = "https://api.p.2chat.io/open/whatsapp/send-message"
+URL_2CHAT = "https://api.2chat.co/v1/messaging/send/text"
+FROM_NUMBER = "+529992922621"
 
 # 🔌 DB CONFIG
 DB_CONFIG = {
@@ -43,30 +44,48 @@ def normalize_phone(phone):
 # 📲 SEND WHATSAPP
 # -------------------------
 def send_whatsapp(phone, message):
+    """
+    Envía un mensaje de WhatsApp a través de la API de 2Chat.
+    """
     try:
-        if not API_KEY_2CHAT:
-            print("❌ API KEY NO CONFIGURADA")
-            return
+        # 1. Validación de Configuración
+        if not API_KEY_2CHAT or API_KEY_2CHAT == "TU_API_KEY_AQUI":
+            print("❌ ERROR: API KEY no configurada.")
+            return False
 
-        phone = normalize_phone(phone)
+        # 2. Preparación de Datos
+        # Asumiendo que normalize_phone ya está definida en tu script
+        phone_ready = normalize_phone(phone)
 
         payload = {
-            "to_number": phone,
-            "message": message
+            "to_number": phone_ready,
+            "from_number": FROM_NUMBER,
+            "text": message
         }
 
         headers = {
-            "X-User-API-Key": API_KEY_2CHAT,
+            "X-User-API-Key": API_KEY_2CHAT,  # Header correcto para 2Chat
             "Content-Type": "application/json"
         }
 
-        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=10)
+        # 3. Petición
+        # Usar json=payload es correcto para enviar el body como JSON
+        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=15)
 
-        print("📤 WhatsApp STATUS:", res.status_code)
-        print("📤 WhatsApp RESPONSE:", res.text)
+        # 4. Manejo de Respuesta
+        if res.status_code in [200, 201, 202]:
+            print(f"✅ Mensaje enviado con éxito a {phone_ready}")
+            return True
+        else:
+            print(f"⚠️ Error {res.status_code} en 2Chat: {res.text}")
+            return False
 
+    except requests.exceptions.Timeout:
+        print("❌ Error: La solicitud excedió el tiempo de espera.")
     except Exception as e:
-        print("❌ Error WhatsApp:", str(e))
+        print(f"❌ Error crítico en WhatsApp: {e}")
+
+    return False
 
 # -------------------------
 # HELPERS
