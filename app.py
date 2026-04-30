@@ -102,9 +102,7 @@ def get_branch_by_code(cursor, code):
 
 def mark_code_used(cursor, conn, code_id):
     cursor.execute("""
-        UPDATE cashier_codes
-        SET used = 1
-        WHERE id = %s
+        UPDATE cashier_codes SET used = 1 WHERE id = %s
     """, (code_id,))
     conn.commit()
 
@@ -132,6 +130,16 @@ def get_all_points(cursor, customer_id):
     """, (customer_id,))
     return cursor.fetchall()
 
+def get_purchase_history(cursor, customer_id):
+    cursor.execute("""
+        SELECT branch_id, DATE(created_at) as day
+        FROM purchases
+        WHERE customer_id=%s
+        ORDER BY created_at DESC
+        LIMIT 10
+    """, (customer_id,))
+    return cursor.fetchall()
+
 def create_reward(cursor, conn, customer_id, branch_id):
     cursor.execute("""
         INSERT INTO rewards (customer_id, branch_id, status)
@@ -154,6 +162,9 @@ def redeem_reward(cursor, conn, reward_id):
     """, (datetime.utcnow(), reward_id))
     conn.commit()
 
+def closing():
+    return "\n\n👉 Para otra compra escribe *hola*"
+
 # -------------------------
 # 🔐 ACTIVE CODE
 # -------------------------
@@ -165,10 +176,7 @@ def get_active_code():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("""
-            DELETE FROM cashier_codes 
-            WHERE branch_id=%s AND expires_at < NOW()
-        """, (branch_id,))
+        cursor.execute("DELETE FROM cashier_codes WHERE branch_id=%s AND expires_at < NOW()", (branch_id,))
 
         cursor.execute("""
             SELECT code, expires_at FROM cashier_codes
@@ -199,51 +207,6 @@ def get_active_code():
         conn.close()
 
 # -------------------------
-# 💻 CASHIER
-# -------------------------
-@app.route("/cashier")
-def cashier():
-    branch_id = request.args.get("branch", 1)
-
-    return render_template_string(f"""
-    <h1>Código activo</h1>
-    <h2 id="code">----</h2>
-    <h3 id="countdown"></h3>
-
-    <script>
-        let secondsLeft = 0;
-
-        function fetchCode() {{
-            fetch('/get_active_code?branch={branch_id}')
-            .then(r => r.json())
-            .then(d => {{
-                document.getElementById("code").innerText = d.code;
-                secondsLeft = d.expires_in;
-            }});
-        }}
-
-        function tick() {{
-            if (secondsLeft <= 0) {{
-                fetchCode();
-                return;
-            }}
-
-            secondsLeft--;
-
-            const m = Math.floor(secondsLeft / 60);
-            const s = secondsLeft % 60;
-
-            document.getElementById("countdown").innerText =
-                "Renueva en: " + m + ":" + String(s).padStart(2, "0");
-        }}
-
-        fetchCode();
-        setInterval(tick, 1000);
-        setInterval(fetchCode, 30000);
-    </script>
-    """)
-
-# -------------------------
 # 📩 WEBHOOK
 # -------------------------
 @app.route("/webhook", methods=["POST"])
@@ -267,9 +230,10 @@ def webhook():
         state = customer.get("state") if customer else None
         response = ""
 
-        # STATUS
+        # STATUS + HISTORIAL
         if text in ["status", "puntos"]:
             rows = get_all_points(cursor, customer_id)
+            history = get_purchase_history(cursor, customer_id)
 
             if not rows:
                 response = "☕ Aún no tienes compras."
@@ -277,7 +241,12 @@ def webhook():
                 msg = "📊 Tus cafés:\n\n"
                 for r in rows:
                     msg += f"Sucursal {r['branch_id']}: {r['total']}\n"
-                response = msg
+
+                msg += "\n🗓 Últimas compras:\n"
+                for h in history:
+                    msg += f"{h['day']} (Sucursal {h['branch_id']})\n"
+
+                response = msg + closing()
 
         # REDIMIR
         elif text == "redimir":
@@ -297,7 +266,7 @@ def webhook():
                 else:
                     redeem_reward(cursor, conn, reward["id"])
                     mark_code_used(cursor, conn, code_data["id"])
-                    response = "🎉 Café GRATIS aplicado"
+                    response = "🎉 Café GRATIS aplicado" + closing()
 
             update_state(cursor, conn, customer_id, None)
 
@@ -317,15 +286,15 @@ def webhook():
 
                 if total % 9 == 0:
                     create_reward(cursor, conn, customer_id, branch_id)
-                    response = "🎉 Ganaste café gratis. Escribe *redimir*"
+                    response = "🎉 Café gratis disponible. Escribe *redimir*" + closing()
                 else:
                     faltan = 9 - (total % 9)
                     if faltan == 9:
                         faltan = 0
-                    response = f"☕ Llevas {total}. Te faltan {faltan}"
+                    response = f"☕ Llevas {total}. Te faltan {faltan}" + closing()
 
-        # DEFAULT
-        else:
+        # RESET
+        elif text == "hola":
             update_state(cursor, conn, customer_id, None)
             response = """👋 Bienvenido
 
@@ -333,8 +302,10 @@ Envía código de 4 dígitos
 
 Escribe *puntos* o *redimir*"""
 
-        send_whatsapp(phone, response)
+        else:
+            response = "Escribe *hola* para comenzar"
 
+        send_whatsapp(phone, response)
         return jsonify({"status": "ok"}), 200
 
     except Exception as e:
