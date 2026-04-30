@@ -232,61 +232,56 @@ def cashier():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("📩 Incoming:", data)
+    # 2Chat envía los datos en una estructura específica, asegúrate de que coincida:
+    # A veces es data.get("from") o data.get("sender", {}).get("phone")
+    phone = normalize_phone(data.get("remote_phone_number"))
+    text = data.get("text", "").strip().lower()  # 2Chat suele enviar 'text' directo o dentro de 'message'
+
+    if not phone:
+        return jsonify({"status": "no phone"}), 200
+
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
 
     try:
-        phone = normalize_phone(data.get("remote_phone_number"))
-        text = data.get("message", {}).get("text", "").strip().lower()
+        customer = get_customer(cursor, phone)
+        customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
-        if not phone:
-            return jsonify({"reply": "Error leyendo número"})
+        response_text = ""
 
-        conn = get_db()
-        cursor = conn.cursor(dictionary=True)
+        # LÓGICA DE RESPUESTAS
+        if text in ["status", "puntos"]:
+            total = count_purchases(cursor, customer_id)
+            response_text = f"☕ Llevas {total} cafés acumulados."
 
-        try:
-            customer = get_customer(cursor, phone)
-
-            if not customer:
-                customer_id = create_customer(cursor, conn, phone)
-            else:
-                customer_id = customer["id"]
-
-            # 🔹 STATUS
-            if text in ["status", "puntos"]:
-                total = count_purchases(cursor, customer_id)
-                return jsonify({"reply": f"☕ Llevas {total} cafés acumulados"})
-
-            # 🔹 CODIGO
-            if text.isdigit():
-                branch_id = 1
-
-                if not validate_code(cursor, text, branch_id):
-                    return jsonify({"reply": "❌ Código inválido o expirado"})
-
+        elif text.isdigit():
+            branch_id = 1
+            if validate_code(cursor, text, branch_id):
                 create_purchase(cursor, conn, customer_id, branch_id)
-
                 total = count_purchases(cursor, customer_id)
 
                 if total % 9 == 0:
                     create_reward(cursor, conn, customer_id)
-                    return jsonify({"reply": "🎉 ¡Café GRATIS desbloqueado!"})
+                    response_text = "🎉 ¡Felicidades! Has desbloqueado un café GRATIS. Muéstrale este mensaje al barista."
+                else:
+                    response_text = f"☕ ¡Código aceptado! Llevas {total} cafés acumulados. Te faltan {9 - (total % 9)} para el próximo gratis."
+            else:
+                response_text = "❌ El código es incorrecto o ya expiró. Pide uno nuevo al cajero."
 
-                return jsonify({"reply": f"☕ Compra registrada\nLlevas {total} cafés"})
+        else:
+            response_text = "👋 ¡Hola! Bienvenido a nuestro programa de lealtad.\n\nEscribe el *código de 4 dígitos* que aparece en la caja para registrar tu compra.\n\nO escribe *puntos* para ver tu progreso."
 
-            # 🔹 DEFAULT
-            return jsonify({
-                "reply": "👋 Bienvenido\n\nEnvía el código del ticket ☕\n\nEscribe *status* para ver tus cafés"
-            })
+        # ESTA ES LA PARTE CLAVE: Enviar el mensaje de vuelta
+        send_whatsapp(phone, response_text)
 
-        finally:
-            cursor.close()
-            conn.close()
+        return jsonify({"status": "success"}), 200
 
     except Exception as e:
         print("❌ Error webhook:", str(e))
-        return jsonify({"error": str(e)})
-
+        return jsonify({"status": "error"}), 500
+    finally:
+        cursor.close()
+        conn.close()
 # -------------------------
 # RUN
 # -------------------------
