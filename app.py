@@ -4,6 +4,13 @@ from datetime import datetime, timedelta
 import random
 import requests
 import os
+import socket
+import requests.packages.urllib3.util.connection as urllib3_cn
+
+def allowed_gai_family():
+    return socket.AF_INET # Fuerza IPv4
+
+urllib3_cn.allowed_gai_family = allowed_gai_family
 
 app = Flask(__name__)
 
@@ -70,7 +77,7 @@ def send_whatsapp(phone, message):
 
         # 3. Petición
         # Usar json=payload es correcto para enviar el body como JSON
-        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=15)
+        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=60)
 
         # 4. Manejo de Respuesta
         if res.status_code in [200, 201, 202]:
