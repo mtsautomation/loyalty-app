@@ -57,11 +57,12 @@ def send_whatsapp(phone, message):
             return False
 
         phone_ready = normalize_phone(phone)
+        from_number_clean = FROM_NUMBER.replace("+", "")
 
         payload = {
             "to_number": phone_ready,
-            "from_number": FROM_NUMBER,
-            "message": message
+            "from_number": from_number_clean,
+            "text": message
         }
 
         headers = {
