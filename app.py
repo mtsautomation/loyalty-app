@@ -27,9 +27,6 @@ DB_CONFIG = {
     "database": os.environ.get("DB_NAME")
 }
 
-# -------------------------
-# 🔌 DB
-# -------------------------
 def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
@@ -83,8 +80,8 @@ def get_customer(cursor, phone):
 
 def create_customer(cursor, conn, phone):
     cursor.execute(
-        "INSERT INTO customers (phone, created_at) VALUES (%s, %s)",
-        (phone, datetime.utcnow())
+        "INSERT INTO customers (phone, created_at, state) VALUES (%s, %s, %s)",
+        (phone, datetime.utcnow(), None)
     )
     conn.commit()
     return cursor.lastrowid
@@ -98,10 +95,18 @@ def update_state(cursor, conn, customer_id, state):
 
 def get_branch_by_code(cursor, code):
     cursor.execute("""
-        SELECT branch_id FROM cashier_codes
-        WHERE code=%s AND expires_at > NOW()
+        SELECT id, branch_id FROM cashier_codes
+        WHERE code=%s AND expires_at > NOW() AND used = 0
     """, (code,))
     return cursor.fetchone()
+
+def mark_code_used(cursor, conn, code_id):
+    cursor.execute("""
+        UPDATE cashier_codes
+        SET used = 1
+        WHERE id = %s
+    """, (code_id,))
+    conn.commit()
 
 def create_purchase(cursor, conn, customer_id, branch_id):
     cursor.execute("""
@@ -167,7 +172,8 @@ def get_active_code():
 
         cursor.execute("""
             SELECT code, expires_at FROM cashier_codes
-            WHERE branch_id=%s ORDER BY id DESC LIMIT 1
+            WHERE branch_id=%s AND used=0
+            ORDER BY id DESC LIMIT 1
         """, (branch_id,))
 
         result = cursor.fetchone()
@@ -180,8 +186,8 @@ def get_active_code():
         expires_at = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
-            INSERT INTO cashier_codes (code, branch_id, expires_at)
-            VALUES (%s, %s, %s)
+            INSERT INTO cashier_codes (code, branch_id, expires_at, used)
+            VALUES (%s, %s, %s, 0)
         """, (code, branch_id, expires_at))
 
         conn.commit()
@@ -238,7 +244,7 @@ def cashier():
     """)
 
 # -------------------------
-# 📩 WEBHOOK (BOT CORE)
+# 📩 WEBHOOK
 # -------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -261,75 +267,71 @@ def webhook():
         state = customer.get("state") if customer else None
         response = ""
 
-        # -------------------------
         # STATUS
-        # -------------------------
         if text in ["status", "puntos"]:
             rows = get_all_points(cursor, customer_id)
 
             if not rows:
-                response = "☕ Aún no tienes compras registradas."
+                response = "☕ Aún no tienes compras."
             else:
                 msg = "📊 Tus cafés:\n\n"
                 for r in rows:
-                    msg += f"Sucursal {r['branch_id']}: {r['total']} cafés\n"
+                    msg += f"Sucursal {r['branch_id']}: {r['total']}\n"
                 response = msg
 
-        # -------------------------
         # REDIMIR
-        # -------------------------
         elif text == "redimir":
-            update_state(cursor, conn, customer_id, "redeem_wait_code")
-            response = "☕ Envia el código del cajero para validar tu café gratis"
+            update_state(cursor, conn, customer_id, "redeem")
+            response = "Envía código del cajero"
 
-        elif state == "redeem_wait_code" and text.isdigit():
+        elif state == "redeem" and text.isdigit():
             code_data = get_branch_by_code(cursor, text)
 
             if not code_data:
-                response = "❌ Código inválido o expirado"
+                response = "❌ Código inválido"
             else:
-                branch_id = code_data["branch_id"]
-                reward = get_pending_reward(cursor, customer_id, branch_id)
+                reward = get_pending_reward(cursor, customer_id, code_data["branch_id"])
 
                 if not reward:
-                    response = "❌ No tienes recompensas disponibles en esta sucursal"
+                    response = "❌ Sin recompensa"
                 else:
                     redeem_reward(cursor, conn, reward["id"])
-                    response = "🎉 Café GRATIS aplicado ☕"
+                    mark_code_used(cursor, conn, code_data["id"])
+                    response = "🎉 Café GRATIS aplicado"
 
             update_state(cursor, conn, customer_id, None)
 
-        # -------------------------
         # REGISTRAR COMPRA
-        # -------------------------
-        elif text.isdigit():
+        elif text.isdigit() and state is None:
             code_data = get_branch_by_code(cursor, text)
 
             if not code_data:
-                response = "❌ Código inválido o expirado"
+                response = "❌ Código inválido o usado"
             else:
                 branch_id = code_data["branch_id"]
 
                 create_purchase(cursor, conn, customer_id, branch_id)
+                mark_code_used(cursor, conn, code_data["id"])
+
                 total = count_purchases_by_branch(cursor, customer_id, branch_id)
 
                 if total % 9 == 0:
                     create_reward(cursor, conn, customer_id, branch_id)
-                    response = "🎉 ¡Tienes un café gratis! Escribe *redimir* para usarlo"
+                    response = "🎉 Ganaste café gratis. Escribe *redimir*"
                 else:
                     faltan = 9 - (total % 9)
-                    response = f"☕ Llevas {total} cafés. Te faltan {faltan}"
+                    if faltan == 9:
+                        faltan = 0
+                    response = f"☕ Llevas {total}. Te faltan {faltan}"
 
-        # -------------------------
         # DEFAULT
-        # -------------------------
         else:
+            update_state(cursor, conn, customer_id, None)
             response = """👋 Bienvenido
 
-Envía el código de 4 dígitos para registrar tu compra
+Envía código de 4 dígitos
 
-Escribe *puntos* para ver tu progreso
-Escribe *redimir* para usar tu recompensa ☕"""
+Escribe *puntos* o *redimir*"""
 
         send_whatsapp(phone, response)
 
