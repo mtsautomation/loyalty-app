@@ -236,7 +236,9 @@ def webhook():
     # 2Chat envía los datos en una estructura específica, asegúrate de que coincida:
     # A veces es data.get("from") o data.get("sender", {}).get("phone")
     phone = normalize_phone(data.get("remote_phone_number"))
-    text = data.get("text", "").strip().lower()  # 2Chat suele enviar 'text' directo o dentro de 'message'
+
+    text = data.get("message", {}).get("text", "").strip().lower() # 2Chat suele enviar 'text' directo o dentro de 'message'
+    print(text)
 
     if not phone:
         return jsonify({"status": "no phone"}), 200
@@ -245,7 +247,7 @@ def webhook():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        print(phone)
+
         customer = get_customer(cursor, phone)
         customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
@@ -256,7 +258,8 @@ def webhook():
             total = count_purchases(cursor, customer_id)
             response_text = f"☕ Llevas {total} cafés acumulados."
 
-        elif text.isdigit():
+
+        elif text.isdigit() and len(text) == 4:
             branch_id = 1
             if validate_code(cursor, text, branch_id):
                 create_purchase(cursor, conn, customer_id, branch_id)
