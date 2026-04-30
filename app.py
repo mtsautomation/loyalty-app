@@ -8,18 +8,18 @@ import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
 
 def allowed_gai_family():
-    return socket.AF_INET # Fuerza IPv4
+    return socket.AF_INET
 
 urllib3_cn.allowed_gai_family = allowed_gai_family
 
 app = Flask(__name__)
 
-# 🔐 2CHAT CONFIG
+# -------------------------
+# 🔐 CONFIG
+# -------------------------
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-URL_2CHAT = "https://api.p.2chat.io/open/whatsapp/send-message"
-FROM_NUMBER = "+529992922621"
+FROM_NUMBER = "529992922621"
 
-# 🔌 DB CONFIG
 DB_CONFIG = {
     "host": os.environ.get("DB_HOST"),
     "user": os.environ.get("DB_USER"),
@@ -27,6 +27,9 @@ DB_CONFIG = {
     "database": os.environ.get("DB_NAME")
 }
 
+# -------------------------
+# 🔌 DB
+# -------------------------
 def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
@@ -36,15 +39,11 @@ def get_db():
 def normalize_phone(phone):
     if not phone:
         return None
-
     phone = phone.replace("+", "").replace(" ", "").strip()
-
     if phone.startswith("52"):
         return phone
-
     if len(phone) == 10:
         return "52" + phone
-
     return phone
 
 # -------------------------
@@ -52,16 +51,9 @@ def normalize_phone(phone):
 # -------------------------
 def send_whatsapp(phone, message):
     try:
-        if not API_KEY_2CHAT:
-            print("❌ API KEY NO CONFIGURADA")
-            return False
-
-        phone_ready = normalize_phone(phone)
-        from_number_clean = FROM_NUMBER.replace("+", "")
-
         payload = {
-            "to_number": phone_ready,
-            "from_number": from_number_clean,
+            "to_number": phone,
+            "from_number": FROM_NUMBER,
             "text": message
         }
 
@@ -70,24 +62,18 @@ def send_whatsapp(phone, message):
             "Content-Type": "application/json"
         }
 
-        print("📤 Enviando a:", phone_ready)
-        print("📤 Payload:", payload)
-
         res = requests.post(
             "https://api.p.2chat.io/open/whatsapp/send-message",
             json=payload,
             headers=headers,
-            timeout=15
+            timeout=10
         )
 
-        print("📤 STATUS:", res.status_code)
-        print("📤 RESPONSE:", res.text)
-
-        return res.status_code in [200, 201, 202]
+        print("📤", res.status_code, res.text)
 
     except Exception as e:
-        print("❌ Error WhatsApp:", str(e))
-        return False
+        print("❌ WhatsApp error:", e)
+
 # -------------------------
 # HELPERS
 # -------------------------
@@ -103,37 +89,68 @@ def create_customer(cursor, conn, phone):
     conn.commit()
     return cursor.lastrowid
 
-def validate_code(cursor, code, branch_id):
-    cursor.execute("""
-        SELECT id FROM cashier_codes 
-        WHERE code=%s AND branch_id=%s AND expires_at > NOW()
-    """, (code, branch_id))
-    return cursor.fetchone() is not None
-
-def create_purchase(cursor, conn, customer_id, branch_id):
+def update_state(cursor, conn, customer_id, state):
     cursor.execute(
-        "INSERT INTO purchases (customer_id, branch_id, created_at) VALUES (%s, %s, %s)",
-        (customer_id, branch_id, datetime.utcnow())
+        "UPDATE customers SET state=%s WHERE id=%s",
+        (state, customer_id)
     )
     conn.commit()
 
-def count_purchases(cursor, customer_id):
-    cursor.execute(
-        "SELECT COUNT(*) as total FROM purchases WHERE customer_id=%s",
-        (customer_id,)
-    )
-    result = cursor.fetchone()
-    return result["total"] if result else 0
+def get_branch_by_code(cursor, code):
+    cursor.execute("""
+        SELECT branch_id FROM cashier_codes
+        WHERE code=%s AND expires_at > NOW()
+    """, (code,))
+    return cursor.fetchone()
 
-def create_reward(cursor, conn, customer_id):
-    cursor.execute(
-        "INSERT INTO rewards (customer_id, reward_type, status) VALUES (%s, %s, %s)",
-        (customer_id, "free_coffee", "pending")
-    )
+def create_purchase(cursor, conn, customer_id, branch_id):
+    cursor.execute("""
+        INSERT INTO purchases (customer_id, branch_id, created_at)
+        VALUES (%s, %s, %s)
+    """, (customer_id, branch_id, datetime.utcnow()))
+    conn.commit()
+
+def count_purchases_by_branch(cursor, customer_id, branch_id):
+    cursor.execute("""
+        SELECT COUNT(*) as total 
+        FROM purchases 
+        WHERE customer_id=%s AND branch_id=%s
+    """, (customer_id, branch_id))
+    return cursor.fetchone()["total"]
+
+def get_all_points(cursor, customer_id):
+    cursor.execute("""
+        SELECT branch_id, COUNT(*) as total
+        FROM purchases
+        WHERE customer_id=%s
+        GROUP BY branch_id
+    """, (customer_id,))
+    return cursor.fetchall()
+
+def create_reward(cursor, conn, customer_id, branch_id):
+    cursor.execute("""
+        INSERT INTO rewards (customer_id, branch_id, status)
+        VALUES (%s, %s, 'pending')
+    """, (customer_id, branch_id))
+    conn.commit()
+
+def get_pending_reward(cursor, customer_id, branch_id):
+    cursor.execute("""
+        SELECT id FROM rewards
+        WHERE customer_id=%s AND branch_id=%s AND status='pending'
+        LIMIT 1
+    """, (customer_id, branch_id))
+    return cursor.fetchone()
+
+def redeem_reward(cursor, conn, reward_id):
+    cursor.execute("""
+        UPDATE rewards SET status='redeemed', redeemed_at=%s
+        WHERE id=%s
+    """, (datetime.utcnow(), reward_id))
     conn.commit()
 
 # -------------------------
-# 🔐 ACTIVE CODE (FIXED)
+# 🔐 ACTIVE CODE
 # -------------------------
 @app.route("/get_active_code")
 def get_active_code():
@@ -157,11 +174,7 @@ def get_active_code():
 
         if result:
             remaining = int((result["expires_at"] - datetime.utcnow()).total_seconds())
-
-            return jsonify({
-                "code": result["code"],
-                "expires_in": max(0, remaining)
-            })
+            return jsonify({"code": result["code"], "expires_in": max(0, remaining)})
 
         code = str(random.randint(1000, 9999))
         expires_at = datetime.utcnow() + timedelta(seconds=60)
@@ -173,17 +186,14 @@ def get_active_code():
 
         conn.commit()
 
-        return jsonify({
-            "code": code,
-            "expires_in": 60
-        })
+        return jsonify({"code": code, "expires_in": 60})
 
     finally:
         cursor.close()
         conn.close()
 
 # -------------------------
-# 💻 CASHIER (FIXED TIMER)
+# 💻 CASHIER
 # -------------------------
 @app.route("/cashier")
 def cashier():
@@ -228,17 +238,15 @@ def cashier():
     """)
 
 # -------------------------
-# 📩 WEBHOOK WHATSAPP (CORE)
+# 📩 WEBHOOK (BOT CORE)
 # -------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    # 2Chat envía los datos en una estructura específica, asegúrate de que coincida:
-    # A veces es data.get("from") o data.get("sender", {}).get("phone")
-    phone = normalize_phone(data.get("remote_phone_number"))
+    print("📩", data)
 
-    text = data.get("message", {}).get("text", "").strip().lower() # 2Chat suele enviar 'text' directo o dentro de 'message'
-    print(text)
+    phone = normalize_phone(data.get("remote_phone_number"))
+    text = data.get("message", {}).get("text", "").strip().lower()
 
     if not phone:
         return jsonify({"status": "no phone"}), 200
@@ -247,46 +255,94 @@ def webhook():
     cursor = conn.cursor(dictionary=True)
 
     try:
-
         customer = get_customer(cursor, phone)
         customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
-        response_text = ""
+        state = customer.get("state") if customer else None
+        response = ""
 
-        # LÓGICA DE RESPUESTAS
+        # -------------------------
+        # STATUS
+        # -------------------------
         if text in ["status", "puntos"]:
-            total = count_purchases(cursor, customer_id)
-            response_text = f"☕ Llevas {total} cafés acumulados."
+            rows = get_all_points(cursor, customer_id)
 
+            if not rows:
+                response = "☕ Aún no tienes compras registradas."
+            else:
+                msg = "📊 Tus cafés:\n\n"
+                for r in rows:
+                    msg += f"Sucursal {r['branch_id']}: {r['total']} cafés\n"
+                response = msg
 
-        elif text.isdigit() and len(text) == 4:
-            branch_id = 1
-            if validate_code(cursor, text, branch_id):
+        # -------------------------
+        # REDIMIR
+        # -------------------------
+        elif text == "redimir":
+            update_state(cursor, conn, customer_id, "redeem_wait_code")
+            response = "☕ Envia el código del cajero para validar tu café gratis"
+
+        elif state == "redeem_wait_code" and text.isdigit():
+            code_data = get_branch_by_code(cursor, text)
+
+            if not code_data:
+                response = "❌ Código inválido o expirado"
+            else:
+                branch_id = code_data["branch_id"]
+                reward = get_pending_reward(cursor, customer_id, branch_id)
+
+                if not reward:
+                    response = "❌ No tienes recompensas disponibles en esta sucursal"
+                else:
+                    redeem_reward(cursor, conn, reward["id"])
+                    response = "🎉 Café GRATIS aplicado ☕"
+
+            update_state(cursor, conn, customer_id, None)
+
+        # -------------------------
+        # REGISTRAR COMPRA
+        # -------------------------
+        elif text.isdigit():
+            code_data = get_branch_by_code(cursor, text)
+
+            if not code_data:
+                response = "❌ Código inválido o expirado"
+            else:
+                branch_id = code_data["branch_id"]
+
                 create_purchase(cursor, conn, customer_id, branch_id)
-                total = count_purchases(cursor, customer_id)
+                total = count_purchases_by_branch(cursor, customer_id, branch_id)
 
                 if total % 9 == 0:
-                    create_reward(cursor, conn, customer_id)
-                    response_text = "🎉 ¡Felicidades! Has desbloqueado un café GRATIS. Muéstrale este mensaje al barista."
+                    create_reward(cursor, conn, customer_id, branch_id)
+                    response = "🎉 ¡Tienes un café gratis! Escribe *redimir* para usarlo"
                 else:
-                    response_text = f"☕ ¡Código aceptado! Llevas {total} cafés acumulados. Te faltan {9 - (total % 9)} para el próximo gratis."
-            else:
-                response_text = "❌ El código es incorrecto o ya expiró. Pide uno nuevo al cajero."
+                    faltan = 9 - (total % 9)
+                    response = f"☕ Llevas {total} cafés. Te faltan {faltan}"
 
+        # -------------------------
+        # DEFAULT
+        # -------------------------
         else:
-            response_text = "👋 ¡Hola! Bienvenido a nuestro programa de lealtad.\n\nEscribe el *código de 4 dígitos* que aparece en la caja para registrar tu compra.\n\nO escribe *puntos* para ver tu progreso."
+            response = """👋 Bienvenido
 
-        # ESTA ES LA PARTE CLAVE: Enviar el mensaje de vuelta
-        send_whatsapp(phone, response_text)
+Envía el código de 4 dígitos para registrar tu compra
 
-        return jsonify({"status": "success"}), 200
+Escribe *puntos* para ver tu progreso
+Escribe *redimir* para usar tu recompensa ☕"""
+
+        send_whatsapp(phone, response)
+
+        return jsonify({"status": "ok"}), 200
 
     except Exception as e:
-        print("❌ Error webhook:", str(e))
+        print("❌ ERROR:", e)
         return jsonify({"status": "error"}), 500
+
     finally:
         cursor.close()
         conn.close()
+
 # -------------------------
 # RUN
 # -------------------------
