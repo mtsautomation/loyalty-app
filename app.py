@@ -16,7 +16,7 @@ app = Flask(__name__)
 
 # 🔐 2CHAT CONFIG
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-URL_2CHAT = "https://api.2chat.io/v1/messaging/send-text"
+URL_2CHAT = "https://api.p.2chat.io/open/whatsapp/send-message"
 FROM_NUMBER = "+529992922621"
 
 # 🔌 DB CONFIG
@@ -51,49 +51,42 @@ def normalize_phone(phone):
 # 📲 SEND WHATSAPP
 # -------------------------
 def send_whatsapp(phone, message):
-    """
-    Envía un mensaje de WhatsApp a través de la API de 2Chat.
-    """
     try:
-        # 1. Validación de Configuración
-        if not API_KEY_2CHAT or API_KEY_2CHAT == "TU_API_KEY_AQUI":
-            print("❌ ERROR: API KEY no configurada.")
+        if not API_KEY_2CHAT:
+            print("❌ API KEY NO CONFIGURADA")
             return False
 
-        # 2. Preparación de Datos
-        # Asumiendo que normalize_phone ya está definida en tu script
         phone_ready = normalize_phone(phone)
 
         payload = {
             "to_number": phone_ready,
             "from_number": FROM_NUMBER,
-            "text": message
+            "message": message
         }
 
         headers = {
-            "X-User-API-Key": API_KEY_2CHAT,  # Header correcto para 2Chat
+            "X-User-API-Key": API_KEY_2CHAT,
             "Content-Type": "application/json"
         }
 
-        # 3. Petición
-        # Usar json=payload es correcto para enviar el body como JSON
-        res = requests.post(URL_2CHAT, json=payload, headers=headers, timeout=60)
+        print("📤 Enviando a:", phone_ready)
+        print("📤 Payload:", payload)
 
-        # 4. Manejo de Respuesta
-        if res.status_code in [200, 201, 202]:
-            print(f"✅ Mensaje enviado con éxito a {phone_ready}")
-            return True
-        else:
-            print(f"⚠️ Error {res.status_code} en 2Chat: {res.text}")
-            return False
+        res = requests.post(
+            "https://api.p.2chat.io/open/whatsapp/send-message",
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
 
-    except requests.exceptions.Timeout:
-        print("❌ Error: La solicitud excedió el tiempo de espera.")
+        print("📤 STATUS:", res.status_code)
+        print("📤 RESPONSE:", res.text)
+
+        return res.status_code in [200, 201, 202]
+
     except Exception as e:
-        print(f"❌ Error crítico en WhatsApp: {e}")
-
-    return False
-
+        print("❌ Error WhatsApp:", str(e))
+        return False
 # -------------------------
 # HELPERS
 # -------------------------
@@ -170,7 +163,7 @@ def get_active_code():
             })
 
         code = str(random.randint(1000, 9999))
-        expires_at = datetime.utcnow() + timedelta(seconds=30)
+        expires_at = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
             INSERT INTO cashier_codes (code, branch_id, expires_at)
@@ -181,7 +174,7 @@ def get_active_code():
 
         return jsonify({
             "code": code,
-            "expires_in": 30
+            "expires_in": 60
         })
 
     finally:
@@ -251,6 +244,7 @@ def webhook():
     cursor = conn.cursor(dictionary=True)
 
     try:
+        print(phone)
         customer = get_customer(cursor, phone)
         customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
