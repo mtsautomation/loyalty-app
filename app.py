@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template_string
+import mysql.connector
+from flask import Flask, request, jsonify, render_template_string, session, redirect
 import mysql.connector
 from datetime import datetime, timedelta
 import random
@@ -6,8 +7,14 @@ import requests
 import os
 import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
-from flask import session, redirect
 
+def allowed_gai_family():
+    return socket.AF_INET
+
+urllib3_cn.allowed_gai_family = allowed_gai_family
+
+app = Flask(__name__)
+app.secret_key = "super_secret_key"
 
 
 def allowed_gai_family():
@@ -184,12 +191,122 @@ def redeem_reward(cursor, conn, reward_id):
 def closing():
     return "\n\n👉 Para registrar otra compra escribe *hola*"
 
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        conn = get_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT * FROM users WHERE username=%s AND password=%s
+        """, (username, password))
+
+        user = cursor.fetchone()
+
+        if not user:
+            return "Credenciales incorrectas", 401
+
+        # generar OTP
+        otp = str(random.randint(1000, 9999))
+        expiry = datetime.utcnow() + timedelta(minutes=5)
+
+        cursor.execute("""
+            UPDATE users 
+            SET otp_code=%s, otp_expiry=%s 
+            WHERE id=%s
+        """, (otp, expiry, user["id"]))
+        conn.commit()
+
+        # enviar por WhatsApp
+        send_whatsapp(user["phone"], f"🔐 Tu código de acceso es: {otp}")
+
+        session["tmp_user"] = user["id"]
+
+        cursor.close()
+        conn.close()
+
+        return redirect("/verify")
+
+    return """
+    <h2>Login</h2>
+    <form method="POST">
+        Usuario: <input name="username"><br><br>
+        Password: <input type="password" name="password"><br><br>
+        <button>Ingresar</button>
+    </form>
+    """
+
+
 # -------------------------
-# 🔐 ACTIVE CODE
+# VERIFY OTP
+# -------------------------
+@app.route("/verify", methods=["GET", "POST"])
+def verify():
+    if "tmp_user" not in session:
+        return redirect("/login")
+
+    if request.method == "POST":
+
+        otp = request.form.get("otp")
+
+        conn = get_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT * FROM users WHERE id=%s", (session["tmp_user"],))
+        user = cursor.fetchone()
+
+        if user["otp_code"] == otp and datetime.utcnow() < user["otp_expiry"]:
+            session["user_id"] = user["id"]
+            session["branch_id"] = user["branch_id"]
+            session.pop("tmp_user", None)
+
+            return redirect("/cashier")
+
+        return "OTP inválido o expirado"
+
+    return """
+    <h2>Verificar código</h2>
+    <form method="POST">
+        Código OTP: <input name="otp"><br><br>
+        <button>Verificar</button>
+    </form>
+    """
+
+
+# -------------------------
+# 🔐 PROTECCIÓN CASHIER
+# -------------------------
+@app.route("/cashier")
+def cashier():
+    if not session.get("user_id"):
+        return redirect("/login")
+
+    return render_template_string("""
+    <h1>Código dinámico activo</h1>
+    <div id="code">----</div>
+
+    <script>
+        async function load(){
+            let r = await fetch('/get_active_code')
+            let d = await r.json()
+            document.getElementById("code").innerText = d.code
+        }
+        setInterval(load, 3000)
+        load()
+    </script>
+    """)
+
+
+# -------------------------
+# 🔐 GET CODE (YA PROTEGIDO)
 # -------------------------
 @app.route("/get_active_code")
 def get_active_code():
-
     if not session.get("user_id"):
         return jsonify({"error": "unauthorized"}), 403
 
@@ -198,186 +315,31 @@ def get_active_code():
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
 
-    try:
-        cursor.execute("DELETE FROM cashier_codes WHERE branch_id=%s AND expires_at < NOW()", (branch_id,))
+    cursor.execute("""
+        SELECT code FROM cashier_codes
+        WHERE branch_id=%s AND used=0
+        ORDER BY id DESC LIMIT 1
+    """, (branch_id,))
 
-        cursor.execute("""
-            SELECT code, expires_at FROM cashier_codes
-            WHERE branch_id=%s AND used=0
-            ORDER BY id DESC LIMIT 1
-        """, (branch_id,))
+    result = cursor.fetchone()
 
-        result = cursor.fetchone()
+    if result:
+        return jsonify({"code": result["code"]})
 
-        if result:
-            remaining = int((result["expires_at"] - datetime.utcnow()).total_seconds())
-            return jsonify({"code": result["code"], "expires_in": max(0, remaining)})
+    code = str(random.randint(1000, 9999))
 
-        code = str(random.randint(1000, 9999))
-        expires_at = datetime.utcnow() + timedelta(seconds=60)
+    cursor.execute("""
+        INSERT INTO cashier_codes (code, branch_id, expires_at, used)
+        VALUES (%s, %s, %s, 0)
+    """, (code, branch_id, datetime.utcnow() + timedelta(seconds=60)))
 
-        cursor.execute("""
-            INSERT INTO cashier_codes (code, branch_id, expires_at, used)
-            VALUES (%s, %s, %s, 0)
-        """, (code, branch_id, expires_at))
+    conn.commit()
 
-        conn.commit()
+    return jsonify({"code": code})
 
-        return jsonify({"code": code, "expires_in": 60})
 
-    finally:
-        cursor.close()
-        conn.close()
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        conn = get_db()
-        cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT * FROM users 
-            WHERE username=%s AND password=%s
-        """, (username, password))
-
-        user = cursor.fetchone()
-
-        cursor.close()
-        conn.close()
-
-        if user:
-            session["user_id"] = user["id"]
-            session["branch_id"] = user["branch_id"]
-            return redirect("/cashier")
-        else:
-            return "Login incorrecto", 401
-
-    return """
-    <h2>Login Cafetería</h2>
-    <form method="POST">
-        Usuario: <input name="username"><br><br>
-        Password: <input name="password" type="password"><br><br>
-        <button type="submit">Entrar</button>
-    </form>
-    """
 # -------------------------
-# 💻 CASHIER (UI MEJORADO)
-# -------------------------
-@app.route("/cashier")
-def cashier():
-
-    if not session.get("user_id"):
-        return redirect("/login")
-
-    branch_id = session.get("branch_id")
-
-    return render_template_string(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Código Caja</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background: #0f172a;
-                color: white;
-                text-align: center;
-                padding: 20px;
-            }}
-
-            .card {{
-                background: #1e293b;
-                border-radius: 20px;
-                padding: 30px;
-                max-width: 400px;
-                margin: auto;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-            }}
-
-            h1 {{
-                font-size: 22px;
-                margin-bottom: 10px;
-                opacity: 0.8;
-            }}
-
-            #code {{
-                font-size: 64px;
-                font-weight: bold;
-                letter-spacing: 8px;
-                margin: 20px 0;
-            }}
-
-            #countdown {{
-                font-size: 20px;
-                margin-top: 10px;
-            }}
-
-            .low {{
-                color: #f87171;
-            }}
-
-            .ok {{
-                color: #4ade80;
-            }}
-
-        </style>
-    </head>
-
-    <body>
-        <div class="card">
-            <h1>🔐 Código activo</h1>
-            <div id="code">----</div>
-            <div id="countdown">Cargando...</div>
-
-        </div>
-
-        <script>
-            let secondsLeft = 0;
-
-            function fetchCode() {{
-                fetch('/get_active_code?branch={branch_id}')
-                .then(r => r.json())
-                .then(d => {{
-                    document.getElementById("code").innerText = d.code;
-                    secondsLeft = d.expires_in;
-                }});
-            }}
-
-            function tick() {{
-                if (secondsLeft <= 0) {{
-                    fetchCode();
-                    return;
-                }}
-
-                secondsLeft--;
-
-                const el = document.getElementById("countdown");
-
-                const m = Math.floor(secondsLeft / 60);
-                const s = secondsLeft % 60;
-
-                el.innerText = "Expira en: " + m + ":" + String(s).padStart(2, "0");
-
-                if (secondsLeft <= 10) {{
-                    el.className = "low";
-                }} else {{
-                    el.className = "ok";
-                }}
-            }}
-
-            fetchCode();
-            setInterval(tick, 1000);
-            setInterval(fetchCode, 30000);
-        </script>
-    </body>
-    </html>
-    """)
-# -------------------------
-# USER LOGOUT
+# LOGOUT
 # -------------------------
 @app.route("/logout")
 def logout():
