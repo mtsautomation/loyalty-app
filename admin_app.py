@@ -68,7 +68,7 @@ def login():
         expiry = datetime.utcnow() + timedelta(minutes=5)
 
         cursor.execute("""
-            UPDATE users SET otp_code=%s, otp_expiry=%s WHERE id=%s
+            UPDATE users SET reset_code=%s, reset_expires=%s WHERE id=%s
         """, (otp, expiry, user["id"]))
         conn.commit()
 
@@ -112,7 +112,7 @@ def verify():
 
         user = cursor.fetchone()
 
-        if user and user["otp_code"] == otp and user["otp_expiry"] > datetime.utcnow():
+        if user and user["reset_code"] == otp and user["reset_expires"] > datetime.utcnow():
 
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
