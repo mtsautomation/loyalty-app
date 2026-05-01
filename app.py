@@ -113,14 +113,30 @@ def create_purchase(cursor, conn, customer_id, branch_id):
     """, (customer_id, branch_id, datetime.utcnow()))
     conn.commit()
 
-def count_purchases_by_branch(cursor, customer_id, branch_id):
+def count_current_cycle(cursor, customer_id, branch_id):
     cursor.execute("""
-        SELECT COUNT(*) as total 
-        FROM purchases 
+        SELECT COUNT(*) as total
+        FROM purchases
         WHERE customer_id=%s AND branch_id=%s
-    """, (customer_id, branch_id))
-    return cursor.fetchone()["total"]
+        AND created_at > IFNULL(
+            (SELECT MAX(redeemed_at)
+             FROM rewards
+             WHERE customer_id=%s AND branch_id=%s AND status='redeemed'),
+            '2000-01-01'
+        )
+    """, (customer_id, branch_id, customer_id, branch_id))
 
+    return cursor.fetchone()["total"]
+def get_last_redeem(cursor, customer_id, branch_id):
+    cursor.execute("""
+        SELECT redeemed_at
+        FROM rewards
+        WHERE customer_id=%s AND branch_id=%s AND status='redeemed'
+        ORDER BY redeemed_at DESC
+        LIMIT 1
+    """, (customer_id, branch_id))
+
+    return cursor.fetchone()
 def get_all_points(cursor, customer_id):
     cursor.execute("""
         SELECT branch_id, COUNT(*) as total
@@ -205,7 +221,127 @@ def get_active_code():
     finally:
         cursor.close()
         conn.close()
+# -------------------------
+# 💻 CASHIER (UI MEJORADO)
+# -------------------------
+@app.route("/cashier")
+def cashier():
+    branch_id = request.args.get("branch", 1)
 
+    return render_template_string(f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Código Caja</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #0f172a;
+                color: white;
+                text-align: center;
+                padding: 20px;
+            }}
+
+            .card {{
+                background: #1e293b;
+                border-radius: 20px;
+                padding: 30px;
+                max-width: 400px;
+                margin: auto;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            }}
+
+            h1 {{
+                font-size: 22px;
+                margin-bottom: 10px;
+                opacity: 0.8;
+            }}
+
+            #code {{
+                font-size: 64px;
+                font-weight: bold;
+                letter-spacing: 8px;
+                margin: 20px 0;
+            }}
+
+            #countdown {{
+                font-size: 20px;
+                margin-top: 10px;
+            }}
+
+            .low {{
+                color: #f87171;
+            }}
+
+            .ok {{
+                color: #4ade80;
+            }}
+
+            .refresh {{
+                margin-top: 20px;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 10px;
+                background: #38bdf8;
+                color: black;
+                font-weight: bold;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+
+    <body>
+        <div class="card">
+            <h1>🔐 Código activo</h1>
+            <div id="code">----</div>
+            <div id="countdown">Cargando...</div>
+
+            <button class="refresh" onclick="fetchCode()">Actualizar</button>
+        </div>
+
+        <script>
+            let secondsLeft = 0;
+
+            function fetchCode() {{
+                fetch('/get_active_code?branch={branch_id}')
+                .then(r => r.json())
+                .then(d => {{
+                    document.getElementById("code").innerText = d.code;
+                    secondsLeft = d.expires_in;
+                }});
+            }}
+
+            function tick() {{
+                if (secondsLeft <= 0) {{
+                    fetchCode();
+                    return;
+                }}
+
+                secondsLeft--;
+
+                const el = document.getElementById("countdown");
+
+                const m = Math.floor(secondsLeft / 60);
+                const s = secondsLeft % 60;
+
+                el.innerText = "Expira en: " + m + ":" + String(s).padStart(2, "0");
+
+                if (secondsLeft <= 10) {{
+                    el.className = "low";
+                }} else {{
+                    el.className = "ok";
+                }}
+            }}
+
+            fetchCode();
+            setInterval(tick, 1000);
+            setInterval(fetchCode, 30000);
+        </script>
+    </body>
+    </html>
+    """)
 # -------------------------
 # 📩 WEBHOOK
 # -------------------------
@@ -233,18 +369,30 @@ def webhook():
         # STATUS + HISTORIAL
         if text in ["status", "puntos"]:
             rows = get_all_points(cursor, customer_id)
-            history = get_purchase_history(cursor, customer_id)
 
             if not rows:
                 response = "☕ Aún no tienes compras acumuladas."
             else:
-                msg = "📊 Tus cafés:\n\n"
-                for r in rows:
-                    msg += f"Sucursal {r['branch_id']}: {r['total']}\n"
+                msg = "📊 Tus compras anteriores:\n\n"
 
-                msg += "\n🗓 Tus últimas compras:\n"
-                for h in history:
-                    msg += f"{h['day']} (Sucursal {h['branch_id']})\n"
+                for r in rows:
+                    branch_id = r["branch_id"]
+
+                    total_actual = count_current_cycle(cursor, customer_id, branch_id)
+                    ultimo = get_last_redeem(cursor, customer_id, branch_id)
+
+                    msg += f"📍 Sucursal {branch_id}\n"
+                    msg += f"☕ Progreso actual: {total_actual}/9\n"
+
+                    if ultimo and ultimo["redeemed_at"]:
+                        fecha = ultimo["redeemed_at"].strftime("%d/%m/%Y")
+                        msg += f"🎁 Último café gratis: {fecha}\n"
+                    else:
+                        msg += "🎁 Aún no has canjeado cafés\n"
+
+                    msg += "\n"
+
+                msg += "✨ Sigue acumulando compras para tu próximo café gratis ☕"
 
                 response = msg + closing()
 
@@ -282,7 +430,7 @@ def webhook():
                 create_purchase(cursor, conn, customer_id, branch_id)
                 mark_code_used(cursor, conn, code_data["id"])
 
-                total = count_purchases_by_branch(cursor, customer_id, branch_id)
+                total = count_current_cycle(cursor, customer_id, branch_id)
 
                 if total % 9 == 0:
                     create_reward(cursor, conn, customer_id, branch_id)
@@ -296,14 +444,17 @@ def webhook():
         # RESET
         elif text == "hola":
             update_state(cursor, conn, customer_id, None)
-            response = """👋 Bienvenido a el programa de recompensas
+            response = """👋 ¡Bienvenido a el programa de recompensas! ☕
+            1️⃣ Compra tu café  
+            2️⃣ Envía el código que ves en caja  
+            3️⃣ Acumula y gana cafés gratis 🎉  
 
--Envía el código de 4 dígitos que te da tu cajero, para registrar tu compra 
--Escribe *puntos* para conocer tus registros anteriores 
--Escribe *redimir* para canjear tu recompensa """
+            📊 Escribe *puntos* para ver tu progreso  
+            🎁 Escribe *redimir* para usar tu recompensa  
 
+            ☕ ¡Disfruta tu café!"""
         else:
-            response = "Escribe *hola* para comenzar"
+            response = "Escribe *Hola* para comenzar"
 
         send_whatsapp(phone, response)
         return jsonify({"status": "ok"}), 200
