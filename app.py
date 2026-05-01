@@ -8,18 +8,15 @@ import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
 
 # -------------------------
-# 🌐 FORCE IPV4 (Railway fix)
+# 🔧 APP INIT (FIXED)
 # -------------------------
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "super_secret_key")
+
 def allowed_gai_family():
     return socket.AF_INET
 
 urllib3_cn.allowed_gai_family = allowed_gai_family
-
-# -------------------------
-# 🚀 APP INIT (FIXED ORDER)
-# -------------------------
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "super_secret_key")
 
 # -------------------------
 # 🔐 CONFIG
@@ -38,142 +35,11 @@ def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
 # -------------------------
-# 📱 NORMALIZE PHONE
-# -------------------------
-def normalize_phone(phone):
-    if not phone:
-        return None
-    phone = phone.replace("+", "").replace(" ", "").strip()
-    if phone.startswith("52"):
-        return phone
-    if len(phone) == 10:
-        return "52" + phone
-    return phone
-
-# -------------------------
-# 📲 SEND WHATSAPP
-# -------------------------
-def send_whatsapp(phone, message):
-    try:
-        payload = {
-            "to_number": phone,
-            "from_number": FROM_NUMBER,
-            "text": message
-        }
-
-        headers = {
-            "X-User-API-Key": API_KEY_2CHAT,
-            "Content-Type": "application/json"
-        }
-
-        res = requests.post(
-            "https://api.p.2chat.io/open/whatsapp/send-message",
-            json=payload,
-            headers=headers,
-            timeout=10
-        )
-
-        print("📤", res.status_code, res.text)
-
-    except Exception as e:
-        print("❌ WhatsApp error:", e)
-
-# -------------------------
-# HELPERS
-# -------------------------
-def get_customer(cursor, phone):
-    cursor.execute("SELECT * FROM customers WHERE phone=%s", (phone,))
-    return cursor.fetchone()
-
-def create_customer(cursor, conn, phone):
-    cursor.execute(
-        "INSERT INTO customers (phone, created_at, state) VALUES (%s, %s, %s)",
-        (phone, datetime.utcnow(), None)
-    )
-    conn.commit()
-    return cursor.lastrowid
-
-def update_state(cursor, conn, customer_id, state):
-    cursor.execute(
-        "UPDATE customers SET state=%s WHERE id=%s",
-        (state, customer_id)
-    )
-    conn.commit()
-
-def get_branch_by_code(cursor, code):
-    cursor.execute("""
-        SELECT id, branch_id FROM cashier_codes
-        WHERE code=%s AND expires_at > NOW() AND used = 0
-    """, (code,))
-    return cursor.fetchone()
-
-def mark_code_used(cursor, conn, code_id):
-    cursor.execute("UPDATE cashier_codes SET used = 1 WHERE id = %s", (code_id,))
-    conn.commit()
-
-def create_purchase(cursor, conn, customer_id, branch_id):
-    cursor.execute("""
-        INSERT INTO purchases (customer_id, branch_id, created_at)
-        VALUES (%s, %s, %s)
-    """, (customer_id, branch_id, datetime.utcnow()))
-    conn.commit()
-
-def count_current_cycle(cursor, customer_id, branch_id):
-    cursor.execute("""
-        SELECT COUNT(*) as total
-        FROM purchases
-        WHERE customer_id=%s AND branch_id=%s
-        AND created_at > IFNULL(
-            (SELECT MAX(redeemed_at)
-             FROM rewards
-             WHERE customer_id=%s AND branch_id=%s AND status='redeemed'),
-            '2000-01-01'
-        )
-    """, (customer_id, branch_id, customer_id, branch_id))
-
-    return cursor.fetchone()["total"]
-
-def get_last_redeem(cursor, customer_id, branch_id):
-    cursor.execute("""
-        SELECT redeemed_at
-        FROM rewards
-        WHERE customer_id=%s AND branch_id=%s AND status='redeemed'
-        ORDER BY redeemed_at DESC
-        LIMIT 1
-    """, (customer_id, branch_id))
-
-    return cursor.fetchone()
-
-def create_reward(cursor, conn, customer_id, branch_id):
-    cursor.execute("""
-        INSERT INTO rewards (customer_id, branch_id, status)
-        VALUES (%s, %s, 'pending')
-    """, (customer_id, branch_id))
-    conn.commit()
-
-def get_pending_reward(cursor, customer_id, branch_id):
-    cursor.execute("""
-        SELECT id FROM rewards
-        WHERE customer_id=%s AND branch_id=%s AND status='pending'
-        LIMIT 1
-    """, (customer_id, branch_id))
-    return cursor.fetchone()
-
-def redeem_reward(cursor, conn, reward_id):
-    cursor.execute("""
-        UPDATE rewards SET status='redeemed', redeemed_at=%s
-        WHERE id=%s
-    """, (datetime.utcnow(), reward_id))
-    conn.commit()
-
-def closing():
-    return "\n\n👉 Para registrar otra compra escribe *hola*"
-
-# -------------------------
-# 🔐 LOGIN
+# 🔐 LOGIN (MODERN UI)
 # -------------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -196,19 +62,84 @@ def login():
             session["branch_id"] = user["branch_id"]
             return redirect("/cashier")
 
-        return "Login incorrecto", 401
+        return "❌ Credenciales incorrectas"
 
-    return """
-    <h2>Login Cafetería</h2>
-    <form method="POST">
-        Usuario: <input name="username"><br><br>
-        Password: <input name="password" type="password"><br><br>
-        <button type="submit">Entrar</button>
-    </form>
-    """
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <style>
+            body {
+                margin: 0;
+                font-family: 'Segoe UI', sans-serif;
+                background: linear-gradient(135deg, #0f172a, #1e293b);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                color: white;
+            }
+
+            .card {
+                background: rgba(255,255,255,0.05);
+                backdrop-filter: blur(20px);
+                padding: 40px;
+                border-radius: 20px;
+                width: 320px;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+            }
+
+            h2 {
+                text-align: center;
+                margin-bottom: 25px;
+            }
+
+            input {
+                width: 100%;
+                padding: 12px;
+                margin-bottom: 15px;
+                border: none;
+                border-radius: 10px;
+                background: rgba(255,255,255,0.1);
+                color: white;
+            }
+
+            button {
+                width: 100%;
+                padding: 12px;
+                border: none;
+                border-radius: 10px;
+                background: #22c55e;
+                color: white;
+                font-weight: bold;
+                cursor: pointer;
+                transition: 0.3s;
+            }
+
+            button:hover {
+                background: #16a34a;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="card">
+            <h2>☕ Acceso Cafetería</h2>
+            <form method="POST">
+                <input name="username" placeholder="Usuario" required>
+                <input name="password" type="password" placeholder="Contraseña" required>
+                <button type="submit">Entrar</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """)
 
 # -------------------------
-# 🔐 ACTIVE CODE (PROTECTED)
+# 🔐 ACTIVE CODE API
 # -------------------------
 @app.route("/get_active_code")
 def get_active_code():
@@ -253,7 +184,7 @@ def get_active_code():
         conn.close()
 
 # -------------------------
-# 💻 CASHIER UI
+# 💻 CASHIER (PREMIUM UI)
 # -------------------------
 @app.route("/cashier")
 def cashier():
@@ -262,37 +193,126 @@ def cashier():
         return redirect("/login")
 
     return render_template_string("""
-    <h1>Código activo</h1>
-    <h2 id="code">----</h2>
-    <h3 id="countdown"></h3>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Código Caja</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <script>
-        let secondsLeft = 0;
-
-        function fetchCode() {
-            fetch('/get_active_code')
-            .then(r => r.json())
-            .then(d => {
-                document.getElementById("code").innerText = d.code;
-                secondsLeft = d.expires_in;
-            });
-        }
-
-        function tick() {
-            if (secondsLeft <= 0) {
-                fetchCode();
-                return;
+        <style>
+            body {
+                margin: 0;
+                font-family: 'Segoe UI', sans-serif;
+                background: radial-gradient(circle at top, #1e293b, #020617);
+                color: white;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
             }
 
-            secondsLeft--;
+            .card {
+                text-align: center;
+                padding: 40px;
+                border-radius: 25px;
+                background: rgba(255,255,255,0.05);
+                backdrop-filter: blur(25px);
+                box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+                width: 320px;
+            }
 
-            document.getElementById("countdown").innerText =
-                "Expira en: " + secondsLeft + "s";
-        }
+            h1 {
+                opacity: 0.7;
+                margin-bottom: 10px;
+            }
 
-        fetchCode();
-        setInterval(tick, 1000);
-    </script>
+            #code {
+                font-size: 70px;
+                font-weight: bold;
+                letter-spacing: 10px;
+                margin: 20px 0;
+                animation: pulse 1.5s infinite;
+            }
+
+            @keyframes pulse {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+                100% { transform: scale(1); }
+            }
+
+            #countdown {
+                font-size: 18px;
+                margin-top: 10px;
+            }
+
+            .low {
+                color: #ef4444;
+            }
+
+            .ok {
+                color: #22c55e;
+            }
+
+            .logout {
+                margin-top: 20px;
+                font-size: 14px;
+                opacity: 0.7;
+                cursor: pointer;
+            }
+
+            .logout:hover {
+                opacity: 1;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="card">
+            <h1>🔐 Código activo</h1>
+            <div id="code">----</div>
+            <div id="countdown">Cargando...</div>
+
+            <div class="logout" onclick="location.href='/logout'">
+                Cerrar sesión
+            </div>
+        </div>
+
+        <script>
+            let secondsLeft = 0;
+
+            function fetchCode() {
+                fetch('/get_active_code')
+                .then(r => r.json())
+                .then(d => {
+                    document.getElementById("code").innerText = d.code;
+                    secondsLeft = d.expires_in;
+                });
+            }
+
+            function tick() {
+                if (secondsLeft <= 0) {
+                    fetchCode();
+                    return;
+                }
+
+                secondsLeft--;
+
+                const el = document.getElementById("countdown");
+
+                const m = Math.floor(secondsLeft / 60);
+                const s = secondsLeft % 60;
+
+                el.innerText = "Expira en: " + m + ":" + String(s).padStart(2, "0");
+
+                el.className = secondsLeft <= 10 ? "low" : "ok";
+            }
+
+            fetchCode();
+            setInterval(tick, 1000);
+            setInterval(fetchCode, 30000);
+        </script>
+    </body>
+    </html>
     """)
 
 # -------------------------
