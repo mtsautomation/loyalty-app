@@ -5,18 +5,22 @@ import random
 import requests
 import os
 import socket
+import bcrypt
 import requests.packages.urllib3.util.connection as urllib3_cn
 
 # -------------------------
-# 🔧 APP INIT (FIXED)
+# ⚙️ FIX NETWORK
 # -------------------------
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "super_secret_key")
-
 def allowed_gai_family():
     return socket.AF_INET
 
 urllib3_cn.allowed_gai_family = allowed_gai_family
+
+# -------------------------
+# 🚀 APP
+# -------------------------
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "super_secret_key")
 
 # -------------------------
 # 🔐 CONFIG
@@ -35,11 +39,22 @@ def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
 # -------------------------
-# 🔐 LOGIN (MODERN UI)
+# 🔐 PASSWORD HELPERS
+# -------------------------
+def hash_password(password):
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password, hashed):
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+def generate_reset_code():
+    return str(random.randint(100000, 999999))
+
+# -------------------------
+# 🔐 LOGIN
 # -------------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
-
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -47,99 +62,28 @@ def login():
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
 
-        cursor.execute("""
-            SELECT * FROM users 
-            WHERE username=%s AND password=%s
-        """, (username, password))
-
+        cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
         user = cursor.fetchone()
 
         cursor.close()
         conn.close()
 
-        if user:
+        if user and verify_password(password, user["password"]):
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
             return redirect("/cashier")
 
-        return "❌ Credenciales incorrectas"
+        return render_template_string(LOGIN_HTML, error="Credenciales incorrectas")
 
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Login</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+    return render_template_string(LOGIN_HTML)
 
-        <style>
-            body {
-                margin: 0;
-                font-family: 'Segoe UI', sans-serif;
-                background: linear-gradient(135deg, #0f172a, #1e293b);
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                color: white;
-            }
-
-            .card {
-                background: rgba(255,255,255,0.05);
-                backdrop-filter: blur(20px);
-                padding: 40px;
-                border-radius: 20px;
-                width: 320px;
-                box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-            }
-
-            h2 {
-                text-align: center;
-                margin-bottom: 25px;
-            }
-
-            input {
-                width: 100%;
-                padding: 12px;
-                margin-bottom: 15px;
-                border: none;
-                border-radius: 10px;
-                background: rgba(255,255,255,0.1);
-                color: white;
-            }
-
-            button {
-                width: 100%;
-                padding: 12px;
-                border: none;
-                border-radius: 10px;
-                background: #22c55e;
-                color: white;
-                font-weight: bold;
-                cursor: pointer;
-                transition: 0.3s;
-            }
-
-            button:hover {
-                background: #16a34a;
-            }
-        </style>
-    </head>
-
-    <body>
-        <div class="card">
-            <h2>☕ Acceso Cafetería</h2>
-            <form method="POST">
-                <input name="username" placeholder="Usuario" required>
-                <input name="password" type="password" placeholder="Contraseña" required>
-                <button type="submit">Entrar</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """)
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 
 # -------------------------
-# 🔐 ACTIVE CODE API
+# 🔐 ACTIVE CODE
 # -------------------------
 @app.route("/get_active_code")
 def get_active_code():
@@ -153,10 +97,13 @@ def get_active_code():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        cursor.execute("DELETE FROM cashier_codes WHERE branch_id=%s AND expires_at < NOW()", (branch_id,))
+        cursor.execute("""
+            DELETE FROM cashier_codes 
+            WHERE branch_id=%s AND expires_at < NOW()
+        """, (branch_id,))
 
         cursor.execute("""
-            SELECT code, expires_at FROM cashier_codes
+            SELECT * FROM cashier_codes
             WHERE branch_id=%s AND used=0
             ORDER BY id DESC LIMIT 1
         """, (branch_id,))
@@ -174,7 +121,6 @@ def get_active_code():
             INSERT INTO cashier_codes (code, branch_id, expires_at, used)
             VALUES (%s, %s, %s, 0)
         """, (code, branch_id, expires_at))
-
         conn.commit()
 
         return jsonify({"code": code, "expires_in": 60})
@@ -184,147 +130,219 @@ def get_active_code():
         conn.close()
 
 # -------------------------
-# 💻 CASHIER (PREMIUM UI)
+# 💻 CASHIER UI
 # -------------------------
 @app.route("/cashier")
 def cashier():
-
     if not session.get("user_id"):
         return redirect("/login")
-
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Código Caja</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-
-        <style>
-            body {
-                margin: 0;
-                font-family: 'Segoe UI', sans-serif;
-                background: radial-gradient(circle at top, #1e293b, #020617);
-                color: white;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-            }
-
-            .card {
-                text-align: center;
-                padding: 40px;
-                border-radius: 25px;
-                background: rgba(255,255,255,0.05);
-                backdrop-filter: blur(25px);
-                box-shadow: 0 30px 80px rgba(0,0,0,0.6);
-                width: 320px;
-            }
-
-            h1 {
-                opacity: 0.7;
-                margin-bottom: 10px;
-            }
-
-            #code {
-                font-size: 70px;
-                font-weight: bold;
-                letter-spacing: 10px;
-                margin: 20px 0;
-                animation: pulse 1.5s infinite;
-            }
-
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-                100% { transform: scale(1); }
-            }
-
-            #countdown {
-                font-size: 18px;
-                margin-top: 10px;
-            }
-
-            .low {
-                color: #ef4444;
-            }
-
-            .ok {
-                color: #22c55e;
-            }
-
-            .logout {
-                margin-top: 20px;
-                font-size: 14px;
-                opacity: 0.7;
-                cursor: pointer;
-            }
-
-            .logout:hover {
-                opacity: 1;
-            }
-        </style>
-    </head>
-
-    <body>
-        <div class="card">
-            <h1>🔐 Código activo</h1>
-            <div id="code">----</div>
-            <div id="countdown">Cargando...</div>
-
-            <div class="logout" onclick="location.href='/logout'">
-                Cerrar sesión
-            </div>
-        </div>
-
-        <script>
-            let secondsLeft = 0;
-
-            function fetchCode() {
-                fetch('/get_active_code')
-                .then(r => r.json())
-                .then(d => {
-                    document.getElementById("code").innerText = d.code;
-                    secondsLeft = d.expires_in;
-                });
-            }
-
-            function tick() {
-                if (secondsLeft <= 0) {
-                    fetchCode();
-                    return;
-                }
-
-                secondsLeft--;
-
-                const el = document.getElementById("countdown");
-
-                const m = Math.floor(secondsLeft / 60);
-                const s = secondsLeft % 60;
-
-                el.innerText = "Expira en: " + m + ":" + String(s).padStart(2, "0");
-
-                el.className = secondsLeft <= 10 ? "low" : "ok";
-            }
-
-            fetchCode();
-            setInterval(tick, 1000);
-            setInterval(fetchCode, 30000);
-        </script>
-    </body>
-    </html>
-    """)
+    return render_template_string(CASHIER_HTML)
 
 # -------------------------
-# LOGOUT
+# 📱 PHONE
 # -------------------------
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
+def normalize_phone(phone):
+    if not phone:
+        return None
+    phone = phone.replace("+", "").replace(" ", "").strip()
+    if phone.startswith("52"):
+        return phone
+    if len(phone) == 10:
+        return "52" + phone
+    return phone
 
 # -------------------------
-# RUN
+# 📲 WHATSAPP
+# -------------------------
+def send_whatsapp(phone, message):
+    try:
+        requests.post(
+            "https://api.p.2chat.io/open/whatsapp/send-message",
+            json={
+                "to_number": phone,
+                "from_number": FROM_NUMBER,
+                "text": message
+            },
+            headers={
+                "X-User-API-Key": API_KEY_2CHAT,
+                "Content-Type": "application/json"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print("❌ WhatsApp error:", e)
+
+# -------------------------
+# 📩 WEBHOOK (BOT + RESET PASSWORD)
+# -------------------------
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+
+    phone = normalize_phone(data.get("remote_phone_number"))
+    text = data.get("message", {}).get("text", "").strip().lower()
+
+    if not phone:
+        return jsonify({"status": "no phone"}), 200
+
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        # Buscar usuario (para reset)
+        cursor.execute("SELECT * FROM users WHERE phone=%s", (phone,))
+        user = cursor.fetchone()
+
+        state = user.get("state") if user else None
+        response = ""
+
+        # -------------------------
+        # 🔑 INICIAR RESET
+        # -------------------------
+        if text == "cambiar contraseña":
+
+            if not user:
+                response = "❌ Este número no está autorizado"
+            else:
+                code = generate_reset_code()
+                expires = datetime.utcnow() + timedelta(minutes=5)
+
+                cursor.execute("""
+                    UPDATE users 
+                    SET reset_code=%s, reset_expires=%s, state=%s
+                    WHERE id=%s
+                """, (code, expires, "await_code", user["id"]))
+                conn.commit()
+
+                response = f"🔐 Código: {code}\nVálido por 5 minutos"
+
+        # -------------------------
+        # ✅ VALIDAR CODIGO
+        # -------------------------
+        elif state == "await_code" and text.isdigit():
+
+            cursor.execute("""
+                SELECT * FROM users 
+                WHERE phone=%s AND reset_code=%s AND reset_expires > NOW()
+            """, (phone, text))
+
+            valid = cursor.fetchone()
+
+            if not valid:
+                response = "❌ Código inválido"
+            else:
+                cursor.execute("""
+                    UPDATE users SET state='await_pass' WHERE id=%s
+                """, (valid["id"],))
+                conn.commit()
+
+                response = "✏️ Envía:\nnueva: tupassword"
+
+        # -------------------------
+        # 🔐 NUEVA PASSWORD
+        # -------------------------
+        elif state == "await_pass" and text.startswith("nueva:"):
+
+            new_pass = text.replace("nueva:", "").strip()
+            hashed = hash_password(new_pass)
+
+            cursor.execute("""
+                UPDATE users 
+                SET password=%s, reset_code=NULL, reset_expires=NULL, state=NULL
+                WHERE phone=%s
+            """, (hashed, phone))
+            conn.commit()
+
+            response = "✅ Contraseña actualizada"
+
+        else:
+            response = "👋 Escribe *cambiar contraseña* para actualizar tu acceso"
+
+        send_whatsapp(phone, response)
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        print("❌ ERROR:", e)
+        return jsonify({"status": "error"}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
+# -------------------------
+# 🎨 LOGIN UI
+# -------------------------
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Login</title>
+<style>
+body {background:#0f172a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;}
+.card {background:#1e293b;padding:40px;border-radius:20px;}
+input {display:block;margin:10px 0;padding:10px;width:100%;border-radius:10px;border:none;}
+button {padding:10px;width:100%;background:#22c55e;border:none;border-radius:10px;color:white;}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>☕ Login</h2>
+{% if error %}<p>{{error}}</p>{% endif %}
+<form method="POST">
+<input name="username" placeholder="Usuario">
+<input name="password" type="password" placeholder="Password">
+<button>Entrar</button>
+</form>
+</div>
+</body>
+</html>
+"""
+
+# -------------------------
+# 🎨 CASHIER UI
+# -------------------------
+CASHIER_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Código</title>
+<style>
+body {background:#0f172a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;}
+.card {background:#1e293b;padding:40px;border-radius:20px;text-align:center;}
+#code {font-size:70px;margin:20px;}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>🔐 Código</h2>
+<div id="code">----</div>
+<div id="timer"></div>
+<br>
+<a href="/logout" style="color:#94a3b8;">Cerrar sesión</a>
+</div>
+
+<script>
+let t=0;
+function fetchCode(){
+ fetch('/get_active_code').then(r=>r.json()).then(d=>{
+   document.getElementById("code").innerText=d.code;
+   t=d.expires_in;
+ });
+}
+function tick(){
+ if(t<=0){fetchCode();return;}
+ t--;
+ document.getElementById("timer").innerText="Expira en "+t+"s";
+}
+fetchCode();
+setInterval(tick,1000);
+</script>
+</body>
+</html>
+"""
+
+# -------------------------
+# 🚀 RUN
 # -------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
