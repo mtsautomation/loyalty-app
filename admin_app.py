@@ -52,92 +52,95 @@ def send_whatsapp(phone, message):
 def login():
 
     if request.method == "POST":
-
         username = request.form.get("username")
-        password = request.form.get("password")
 
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
 
-        cursor.execute("""
-            SELECT * FROM users 
-            WHERE username=%s AND password=%s
-        """, (username, password))
-
+        cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
         user = cursor.fetchone()
 
         if not user:
-            return "❌ Credenciales incorrectas"
+            return "Usuario no existe", 404
 
         # generar OTP
         otp = str(random.randint(1000, 9999))
         expiry = datetime.utcnow() + timedelta(minutes=5)
 
         cursor.execute("""
-            UPDATE users 
-            SET otp_code=%s, otp_expiry=%s
-            WHERE id=%s
+            UPDATE users SET otp_code=%s, otp_expiry=%s WHERE id=%s
         """, (otp, expiry, user["id"]))
         conn.commit()
 
-        send_whatsapp(user["phone"], f"🔐 Tu código OTP es: {otp}")
-
-        session["tmp_user"] = user["id"]
+        # enviar por WhatsApp
+        send_whatsapp(user["phone"], f"🔐 Tu código de acceso es: {otp}")
 
         cursor.close()
         conn.close()
+
+        session["temp_user"] = user["id"]
 
         return redirect("/verify")
 
     return """
     <h2>Login Administrador</h2>
     <form method="POST">
-        Usuario:<br><input name="username"><br><br>
-        Password:<br><input type="password" name="password"><br><br>
-        <button>Solicitar acceso</button>
+        Usuario:<br>
+        <input name="username" required><br><br>
+
+        <button type="submit">Solicitar acceso</button>
     </form>
     """
-
 # -------------------------
 # VERIFY OTP
 # -------------------------
 @app.route("/verify", methods=["GET", "POST"])
 def verify():
 
-    if "tmp_user" not in session:
+    if not session.get("temp_user"):
         return redirect("/")
 
     if request.method == "POST":
-
         otp = request.form.get("otp")
 
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
 
-        cursor.execute("SELECT * FROM users WHERE id=%s", (session["tmp_user"],))
+        cursor.execute("""
+            SELECT * FROM users WHERE id=%s
+        """, (session["temp_user"],))
+
         user = cursor.fetchone()
 
-        if user["otp_code"] == otp and datetime.utcnow() < user["otp_expiry"]:
+        if user and user["otp_code"] == otp and user["otp_expiry"] > datetime.utcnow():
+
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
-            session.pop("tmp_user", None)
+            session.pop("temp_user", None)
+
+            cursor.close()
+            conn.close()
 
             return redirect("/cashier")
 
-        return "❌ OTP inválido o expirado"
+        cursor.close()
+        conn.close()
+
+        return "OTP incorrecto o expirado", 401
 
     return """
-    <h2>Verificación OTP</h2>
+    <h2>Verificación</h2>
     <form method="POST">
-        Código:<br><input name="otp"><br><br>
-        <button>Entrar</button>
+        Código OTP:<br>
+        <input name="otp" required><br><br>
+
+        <button type="submit">Ingresar</button>
     </form>
     """
-
 # -------------------------
 # CASHIER
 # -------------------------
-@app.route("/cashier")
+@app.route("admin/cashier")
 def cashier():
 
     if not session.get("user_id"):
@@ -175,7 +178,7 @@ def cashier():
 # -------------------------
 # GENERAR CODIGO
 # -------------------------
-@app.route("/get_code")
+@app.route("admin/get_code")
 def get_code():
 
     if not session.get("user_id"):
@@ -213,7 +216,7 @@ def get_code():
 # -------------------------
 # LOGOUT
 # -------------------------
-@app.route("/logout")
+@app.route("admin/logout")
 def logout():
     session.clear()
     return redirect("/")
