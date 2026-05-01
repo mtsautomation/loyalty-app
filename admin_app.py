@@ -147,34 +147,175 @@ def cashier():
         return redirect("/")
 
     return render_template_string("""
-    <h1>🔐 Código dinámico</h1>
-    <div id="code">----</div>
-    <div id="timer"></div>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Código de Caja</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <style>
+            body {
+                margin: 0;
+                font-family: 'Segoe UI', sans-serif;
+                background: linear-gradient(135deg, #2c1b12, #1a120d);
+                color: #f5e6d3;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+            }
+
+            .card {
+                background: #3b2a21;
+                padding: 40px;
+                border-radius: 20px;
+                width: 90%;
+                max-width: 420px;
+                text-align: center;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+                border: 1px solid rgba(255,255,255,0.05);
+            }
+
+            .title {
+                font-size: 18px;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                opacity: 0.7;
+            }
+
+            .brand {
+                font-size: 22px;
+                margin-top: 5px;
+                color: #d6a85f;
+                font-weight: bold;
+            }
+
+            #code {
+                font-size: 72px;
+                font-weight: bold;
+                letter-spacing: 12px;
+                margin: 30px 0;
+                color: #fff3e0;
+                text-shadow: 0 0 10px rgba(255, 220, 150, 0.3);
+                transition: all 0.3s ease;
+            }
+
+            #timer {
+                font-size: 18px;
+                margin-top: 10px;
+                padding: 10px;
+                border-radius: 10px;
+                display: inline-block;
+                min-width: 120px;
+            }
+
+            .ok {
+                color: #8bcf9b;
+            }
+
+            .warning {
+                color: #f4c430;
+            }
+
+            .danger {
+                color: #ff6b6b;
+                animation: pulse 1s infinite;
+            }
+
+            @keyframes pulse {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.08); }
+                100% { transform: scale(1); }
+            }
+
+            .footer {
+                margin-top: 20px;
+                font-size: 12px;
+                opacity: 0.4;
+            }
+
+            button {
+                margin-top: 20px;
+                padding: 10px 20px;
+                background: #d6a85f;
+                border: none;
+                border-radius: 10px;
+                color: #2c1b12;
+                font-weight: bold;
+                cursor: pointer;
+            }
+
+            button:hover {
+                background: #e5b96c;
+            }
+        </style>
+    </head>
+
+    <body>
+
+    <div class="card">
+        <div class="title">Sistema de Caja</div>
+        <div class="brand">☕ Coffee Rewards</div>
+
+        <div id="code">----</div>
+
+        <div id="timer" class="ok">Cargando...</div>
+
+        <button onclick="load()">🔄 Actualizar</button>
+
+        <div class="footer">
+            Código válido por tiempo limitado
+        </div>
+    </div>
 
     <script>
         let seconds = 0;
 
         async function load(){
-            let r = await fetch('/admin/get_code')
-            let d = await r.json()
-            document.getElementById("code").innerText = d.code
-            seconds = d.expires_in
-        }
+            try {
+                let r = await fetch('/admin/get_code');
+                let d = await r.json();
 
-        function tick(){
-            seconds--
-            document.getElementById("timer").innerText = "Expira en: " + seconds
-            if(seconds <= 0){
-                load()
+                document.getElementById("code").innerText = d.code;
+                seconds = d.expires_in;
+            } catch(e){
+                console.error(e);
             }
         }
 
-        setInterval(tick, 1000)
-        setInterval(load, 30000)
-        load()
-    </script>
-    """)
+        function tick(){
+            if(seconds <= 0){
+                load();
+                return;
+            }
 
+            seconds--;
+
+            let el = document.getElementById("timer");
+
+            let m = Math.floor(seconds / 60);
+            let s = seconds % 60;
+
+            el.innerText = "Expira en " + m + ":" + String(s).padStart(2, "0");
+
+            if(seconds > 20){
+                el.className = "ok";
+            } else if(seconds > 10){
+                el.className = "warning";
+            } else {
+                el.className = "danger";
+            }
+        }
+
+        setInterval(tick, 1000);
+        setInterval(load, 30000);
+
+        load();
+    </script>
+
+    </body>
+    </html>
+    """)
 # -------------------------
 # GENERAR CODIGO
 # -------------------------
