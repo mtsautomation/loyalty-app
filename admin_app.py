@@ -121,7 +121,7 @@ def verify():
             cursor.close()
             conn.close()
 
-            return redirect("/cashier")
+            return redirect("/admin/cashier")
 
         cursor.close()
         conn.close()
