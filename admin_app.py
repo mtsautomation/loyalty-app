@@ -140,7 +140,7 @@ def verify():
 # -------------------------
 # CASHIER
 # -------------------------
-@app.route("admin/cashier")
+@app.route("/admin/cashier")
 def cashier():
 
     if not session.get("user_id"):
@@ -155,7 +155,7 @@ def cashier():
         let seconds = 0;
 
         async function load(){
-            let r = await fetch('/get_code')
+            let r = await fetch('/admin/get_code')
             let d = await r.json()
             document.getElementById("code").innerText = d.code
             seconds = d.expires_in
@@ -178,7 +178,7 @@ def cashier():
 # -------------------------
 # GENERAR CODIGO
 # -------------------------
-@app.route("admin/get_code")
+@app.route("/admin/get_code")
 def get_code():
 
     if not session.get("user_id"):
@@ -189,34 +189,38 @@ def get_code():
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
-        SELECT * FROM cashier_codes
-        WHERE branch_id=%s AND used=0 AND expires_at > NOW()
-        ORDER BY id DESC LIMIT 1
-    """, (branch_id,))
+    try:
+        cursor.execute("""
+            SELECT * FROM cashier_codes
+            WHERE branch_id=%s AND used=0 AND expires_at > NOW()
+            ORDER BY id DESC LIMIT 1
+        """, (branch_id,))
 
-    code = cursor.fetchone()
+        code = cursor.fetchone()
 
-    if code:
-        remaining = int((code["expires_at"] - datetime.utcnow()).total_seconds())
-        return jsonify({"code": code["code"], "expires_in": remaining})
+        if code:
+            remaining = int((code["expires_at"] - datetime.utcnow()).total_seconds())
+            return jsonify({"code": code["code"], "expires_in": remaining})
 
-    new_code = str(random.randint(1000, 9999))
-    expiry = datetime.utcnow() + timedelta(seconds=60)
+        new_code = str(random.randint(1000, 9999))
+        expiry = datetime.utcnow() + timedelta(seconds=60)
 
-    cursor.execute("""
-        INSERT INTO cashier_codes (code, branch_id, expires_at, used)
-        VALUES (%s, %s, %s, 0)
-    """, (new_code, branch_id, expiry))
+        cursor.execute("""
+            INSERT INTO cashier_codes (code, branch_id, expires_at, used)
+            VALUES (%s, %s, %s, 0)
+        """, (new_code, branch_id, expiry))
 
-    conn.commit()
+        conn.commit()
 
-    return jsonify({"code": new_code, "expires_in": 60})
+        return jsonify({"code": new_code, "expires_in": 60})
 
+    finally:
+        cursor.close()
+        conn.close()
 # -------------------------
 # LOGOUT
 # -------------------------
-@app.route("admin/logout")
+@app.route("/admin/logout")
 def logout():
     session.clear()
     return redirect("/")
