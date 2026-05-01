@@ -6,6 +6,9 @@ import requests
 import os
 import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
+from flask import session, redirect
+
+app.secret_key = "super_secret_key"
 
 def allowed_gai_family():
     return socket.AF_INET
@@ -186,7 +189,11 @@ def closing():
 # -------------------------
 @app.route("/get_active_code")
 def get_active_code():
-    branch_id = request.args.get("branch", 1)
+
+    if not session.get("user_id"):
+        return jsonify({"error": "unauthorized"}), 403
+
+    branch_id = session.get("branch_id")
 
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -221,12 +228,50 @@ def get_active_code():
     finally:
         cursor.close()
         conn.close()
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        conn = get_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT * FROM users 
+            WHERE username=%s AND password=%s
+        """, (username, password))
+
+        user = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if user:
+            session["user_id"] = user["id"]
+            session["branch_id"] = user["branch_id"]
+            return redirect("/cashier")
+        else:
+            return "Login incorrecto", 401
+
+    return """
+    <h2>Login Cafetería</h2>
+    <form method="POST">
+        Usuario: <input name="username"><br><br>
+        Password: <input name="password" type="password"><br><br>
+        <button type="submit">Entrar</button>
+    </form>
+    """
 # -------------------------
 # 💻 CASHIER (UI MEJORADO)
 # -------------------------
 @app.route("/cashier")
 def cashier():
-    branch_id = request.args.get("branch", 1)
+
+    if not session.get("user_id"):
+        return redirect("/login")
+
+    branch_id = session.get("branch_id")
 
     return render_template_string(f"""
     <!DOCTYPE html>
@@ -279,16 +324,6 @@ def cashier():
                 color: #4ade80;
             }}
 
-            .refresh {{
-                margin-top: 20px;
-                padding: 10px 20px;
-                border: none;
-                border-radius: 10px;
-                background: #38bdf8;
-                color: black;
-                font-weight: bold;
-                cursor: pointer;
-            }}
         </style>
     </head>
 
@@ -298,7 +333,6 @@ def cashier():
             <div id="code">----</div>
             <div id="countdown">Cargando...</div>
 
-            <button class="refresh" onclick="fetchCode()">Actualizar</button>
         </div>
 
         <script>
@@ -342,6 +376,13 @@ def cashier():
     </body>
     </html>
     """)
+# -------------------------
+# USER LOGOUT
+# -------------------------
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 # -------------------------
 # 📩 WEBHOOK
 # -------------------------
