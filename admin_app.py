@@ -8,9 +8,6 @@ import os
 app = Flask(__name__)
 app.secret_key = "super_secret_key_admin"
 
-# -------------------------
-# CONFIG
-# -------------------------
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
 FROM_NUMBER = "529992922621"
 
@@ -24,9 +21,6 @@ DB_CONFIG = {
 def get_db():
     return mysql.connector.connect(**DB_CONFIG)
 
-# -------------------------
-# WHATSAPP
-# -------------------------
 def send_whatsapp(phone, message):
     try:
         requests.post(
@@ -46,7 +40,7 @@ def send_whatsapp(phone, message):
         print("WhatsApp error:", e)
 
 # -------------------------
-# LOGIN STEP 1
+# LOGIN
 # -------------------------
 @app.route("/", methods=["GET", "POST"])
 def login():
@@ -63,7 +57,6 @@ def login():
         if not user:
             return "Usuario no existe", 404
 
-        # generar OTP
         otp = str(random.randint(1000, 9999))
         expiry = datetime.utcnow() + timedelta(minutes=5)
 
@@ -72,7 +65,6 @@ def login():
         """, (otp, expiry, user["id"]))
         conn.commit()
 
-        # enviar por WhatsApp
         send_whatsapp(user["phone"], f"🔐 Tu código de acceso es: {otp}")
 
         cursor.close()
@@ -83,14 +75,100 @@ def login():
         return redirect("/verify")
 
     return """
-    <h2>Login Administrador</h2>
-    <form method="POST">
-        Usuario:<br>
-        <input name="username" required><br><br>
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+    :root{
+        --bg:#1f1b17;
+        --card:#253532;
+        --accent:#517f83;
+        --soft:#9e8d77;
+        --espresso:#583d34;
+        --text:#f5f5f5;
+    }
 
+    body{
+        margin:0;
+        font-family: Inter, sans-serif;
+        background: radial-gradient(circle at top, var(--card), var(--bg));
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        height:100vh;
+        color:var(--text);
+    }
+
+    .card{
+        background:rgba(37,53,50,0.6);
+        backdrop-filter:blur(20px);
+        padding:45px;
+        border-radius:22px;
+        width:90%;
+        max-width:380px;
+        border:1px solid rgba(255,255,255,0.05);
+        animation:fade .7s ease;
+    }
+
+    @keyframes fade{
+        from{opacity:0; transform:translateY(20px)}
+        to{opacity:1; transform:translateY(0)}
+    }
+
+    .brand{
+        text-align:center;
+        font-size:22px;
+        color:var(--soft);
+        margin-bottom:25px;
+        letter-spacing:1px;
+    }
+
+    input{
+        width:100%;
+        padding:14px;
+        border-radius:12px;
+        border:none;
+        background:#1a1a1a;
+        color:white;
+        margin-bottom:20px;
+        transition:.3s;
+    }
+
+    input:focus{
+        outline:none;
+        box-shadow:0 0 0 2px var(--accent);
+        transform:scale(1.02);
+    }
+
+    button{
+        width:100%;
+        padding:14px;
+        border:none;
+        border-radius:12px;
+        background:linear-gradient(135deg,var(--accent),var(--soft));
+        color:#111;
+        font-weight:bold;
+        cursor:pointer;
+        transition:.3s;
+    }
+
+    button:hover{
+        transform:scale(1.05);
+    }
+    </style>
+    </head>
+
+    <body>
+    <form method="POST" class="card">
+        <div class="brand">☕ Coffee Admin</div>
+        <input name="username" placeholder="Usuario" required>
         <button type="submit">Solicitar acceso</button>
     </form>
+    </body>
+    </html>
     """
+
 # -------------------------
 # VERIFY OTP
 # -------------------------
@@ -106,37 +184,83 @@ def verify():
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
 
-        cursor.execute("""
-            SELECT * FROM users WHERE id=%s
-        """, (session["temp_user"],))
-
+        cursor.execute("SELECT * FROM users WHERE id=%s", (session["temp_user"],))
         user = cursor.fetchone()
 
         if user and user["reset_code"] == otp and user["reset_expires"] > datetime.utcnow():
-
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
             session.pop("temp_user", None)
-
-            cursor.close()
-            conn.close()
-
             return redirect("/admin/cashier")
 
-        cursor.close()
-        conn.close()
-
-        return "OTP incorrecto o expirado", 401
+        return "OTP incorrecto", 401
 
     return """
-    <h2>Verificación</h2>
-    <form method="POST">
-        Código OTP:<br>
-        <input name="otp" required><br><br>
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+    body{
+        margin:0;
+        background:#1f1b17;
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        height:100vh;
+        color:white;
+        font-family:Inter;
+    }
 
-        <button type="submit">Ingresar</button>
+    .card{
+        background:#253532;
+        padding:40px;
+        border-radius:20px;
+        text-align:center;
+        animation:fade .5s ease;
+    }
+
+    input{
+        font-size:32px;
+        letter-spacing:12px;
+        text-align:center;
+        padding:15px;
+        border:none;
+        border-radius:12px;
+        background:#111;
+        color:#9e8d77;
+        margin-top:20px;
+        transition:.3s;
+    }
+
+    input:focus{
+        outline:none;
+        transform:scale(1.08);
+    }
+
+    button{
+        margin-top:20px;
+        padding:12px;
+        width:100%;
+        border:none;
+        border-radius:12px;
+        background:#517f83;
+        font-weight:bold;
+        cursor:pointer;
+    }
+    </style>
+    </head>
+
+    <body>
+    <form method="POST" class="card">
+        <h2>🔐 Verificación</h2>
+        <input name="otp" maxlength="4" required>
+        <button>Validar</button>
     </form>
+    </body>
+    </html>
     """
+
 # -------------------------
 # CASHIER
 # -------------------------
@@ -150,174 +274,139 @@ def cashier():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Código de Caja</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-        <style>
-            body {
-                margin: 0;
-                font-family: 'Segoe UI', sans-serif;
-                background: linear-gradient(135deg, #2c1b12, #1a120d);
-                color: #f5e6d3;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                height: 100vh;
-            }
+    <style>
+    :root{
+        --bg:#1f1b17;
+        --card:#253532;
+        --accent:#517f83;
+        --soft:#9e8d77;
+        --danger:#ff6b6b;
+    }
 
-            .card {
-                background: #3b2a21;
-                padding: 40px;
-                border-radius: 20px;
-                width: 90%;
-                max-width: 420px;
-                text-align: center;
-                box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-                border: 1px solid rgba(255,255,255,0.05);
-            }
+    body{
+        margin:0;
+        background:linear-gradient(160deg,#1f1b17,#253532);
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        height:100vh;
+        font-family:Inter;
+        color:white;
+    }
 
-            .title {
-                font-size: 18px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                opacity: 0.7;
-            }
+    .card{
+        background:rgba(37,53,50,0.7);
+        backdrop-filter:blur(25px);
+        padding:50px;
+        border-radius:25px;
+        text-align:center;
+        border:1px solid rgba(255,255,255,0.06);
+        animation:fade .6s ease;
+    }
 
-            .brand {
-                font-size: 22px;
-                margin-top: 5px;
-                color: #d6a85f;
-                font-weight: bold;
-            }
+    #code{
+        font-size:90px;
+        letter-spacing:16px;
+        margin:30px 0;
+        color:#f5f5f5;
+        transition:.25s;
+    }
 
-            #code {
-                font-size: 72px;
-                font-weight: bold;
-                letter-spacing: 12px;
-                margin: 30px 0;
-                color: #fff3e0;
-                text-shadow: 0 0 10px rgba(255, 220, 150, 0.3);
-                transition: all 0.3s ease;
-            }
+    #timer{
+        opacity:.7;
+        transition:.3s;
+    }
 
-            #timer {
-                font-size: 18px;
-                margin-top: 10px;
-                padding: 10px;
-                border-radius: 10px;
-                display: inline-block;
-                min-width: 120px;
-            }
+    .danger{
+        color:var(--danger);
+        transform:scale(1.1);
+    }
 
-            .ok {
-                color: #8bcf9b;
-            }
+    button{
+        margin-top:20px;
+        padding:12px 20px;
+        border:none;
+        border-radius:12px;
+        background:var(--accent);
+        color:white;
+        font-weight:bold;
+        cursor:pointer;
+        transition:.3s;
+    }
 
-            .warning {
-                color: #f4c430;
-            }
+    button:hover{
+        transform:scale(1.05);
+    }
 
-            .danger {
-                color: #ff6b6b;
-                animation: pulse 1s infinite;
-            }
-
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.08); }
-                100% { transform: scale(1); }
-            }
-
-            .footer {
-                margin-top: 20px;
-                font-size: 12px;
-                opacity: 0.4;
-            }
-
-            button {
-                margin-top: 20px;
-                padding: 10px 20px;
-                background: #d6a85f;
-                border: none;
-                border-radius: 10px;
-                color: #2c1b12;
-                font-weight: bold;
-                cursor: pointer;
-            }
-
-            button:hover {
-                background: #e5b96c;
-            }
-        </style>
+    @keyframes fade{
+        from{opacity:0; transform:translateY(20px)}
+        to{opacity:1; transform:translateY(0)}
+    }
+    </style>
     </head>
 
     <body>
 
     <div class="card">
-        <div class="title">Sistema de Caja</div>
-        <div class="brand">☕ Coffee Rewards</div>
+        <div style="color:#9e8d77;">☕ Coffee Rewards</div>
 
         <div id="code">----</div>
+        <div id="timer">Cargando...</div>
 
-        <div id="timer" class="ok">Cargando...</div>
-
-        <button onclick="load()">🔄 Actualizar</button>
-
-        <div class="footer">
-            Código válido por tiempo limitado
-        </div>
+        <button onclick="load()">Actualizar</button>
     </div>
 
     <script>
-        let seconds = 0;
+    let seconds = 0;
 
-        async function load(){
-            try {
-                let r = await fetch('/admin/get_code');
-                let d = await r.json();
+    async function load(){
+        let r = await fetch('/admin/get_code');
+        let d = await r.json();
 
-                document.getElementById("code").innerText = d.code;
-                seconds = d.expires_in;
-            } catch(e){
-                console.error(e);
-            }
+        let codeEl = document.getElementById("code");
+
+        codeEl.style.transform="scale(0.7)";
+        codeEl.style.opacity="0.4";
+
+        setTimeout(()=>{
+            codeEl.innerText = d.code;
+            codeEl.style.transform="scale(1)";
+            codeEl.style.opacity="1";
+        },150);
+
+        seconds = d.expires_in;
+    }
+
+    function tick(){
+        seconds--;
+
+        let el = document.getElementById("timer");
+        el.innerText = "Expira en " + seconds + "s";
+
+        if(seconds < 10){
+            el.className = "danger";
+        } else {
+            el.className = "";
         }
 
-        function tick(){
-            if(seconds <= 0){
-                load();
-                return;
-            }
-
-            seconds--;
-
-            let el = document.getElementById("timer");
-
-            let m = Math.floor(seconds / 60);
-            let s = seconds % 60;
-
-            el.innerText = "Expira en " + m + ":" + String(s).padStart(2, "0");
-
-            if(seconds > 20){
-                el.className = "ok";
-            } else if(seconds > 10){
-                el.className = "warning";
-            } else {
-                el.className = "danger";
-            }
+        if(seconds <= 0){
+            load();
         }
+    }
 
-        setInterval(tick, 1000);
-        setInterval(load, 30000);
-
-        load();
+    setInterval(tick,1000);
+    setInterval(load,30000);
+    load();
     </script>
 
     </body>
     </html>
     """)
+
 # -------------------------
-# GENERAR CODIGO
+# GET CODE
 # -------------------------
 @app.route("/admin/get_code")
 def get_code():
@@ -358,16 +447,11 @@ def get_code():
     finally:
         cursor.close()
         conn.close()
-# -------------------------
-# LOGOUT
-# -------------------------
+
 @app.route("/admin/logout")
 def logout():
     session.clear()
     return redirect("/")
 
-# -------------------------
-# RUN
-# -------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001)
