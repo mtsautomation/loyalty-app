@@ -190,6 +190,7 @@ def verify():
         if user and user["reset_code"] == otp and user["reset_expires"] > datetime.utcnow():
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
+            session["cafe_id"] = user["cafe_id"]
             session.pop("temp_user", None)
             return redirect("/admin/cashier")
 
@@ -414,7 +415,7 @@ def get_code():
     if not session.get("user_id"):
         return jsonify({"error": "unauthorized"}), 403
 
-    branch_id = session["branch_id"]
+    branch_id = session["cafe_id"]
 
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -422,7 +423,7 @@ def get_code():
     try:
         cursor.execute("""
             SELECT * FROM cashier_codes
-            WHERE branch_id=%s AND used=0 AND expires_at > NOW()
+            WHERE branch_id=%s AND cafe_id=%s AND used=0 AND expires_at > NOW()
             ORDER BY id DESC LIMIT 1
         """, (branch_id,))
 
@@ -436,7 +437,7 @@ def get_code():
         expiry = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
-            INSERT INTO cashier_codes (code, branch_id, expires_at, used)
+            INSERT INTO cashier_codes (code, branch_id, cafe_id, expires_at, used)
             VALUES (%s, %s, %s, 0)
         """, (new_code, branch_id, expiry))
 
