@@ -415,7 +415,10 @@ def get_code():
     if not session.get("user_id"):
         return jsonify({"error": "unauthorized"}), 403
 
-    branch_id = session["cafe_id"]
+    branch_id = session.get("branch_id")
+    cafe_id = session.get("cafe_id")
+
+    print("SESSION DEBUG:", session)
 
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -425,25 +428,32 @@ def get_code():
             SELECT * FROM cashier_codes
             WHERE branch_id=%s AND cafe_id=%s AND used=0 AND expires_at > NOW()
             ORDER BY id DESC LIMIT 1
-        """, (branch_id,))
+        """, (branch_id, cafe_id))
 
         code = cursor.fetchone()
 
         if code:
             remaining = int((code["expires_at"] - datetime.utcnow()).total_seconds())
-            return jsonify({"code": code["code"], "expires_in": remaining})
+            return jsonify({
+                "code": code["code"],
+                "expires_in": max(0, remaining)
+            })
 
         new_code = str(random.randint(1000, 9999))
         expiry = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
             INSERT INTO cashier_codes (code, branch_id, cafe_id, expires_at, used)
-            VALUES (%s, %s, %s, 0)
-        """, (new_code, branch_id, expiry))
+            VALUES (%s, %s, %s, %s, 0)
+        """, (new_code, branch_id, cafe_id, expiry))
 
         conn.commit()
 
         return jsonify({"code": new_code, "expires_in": 60})
+
+    except Exception as e:
+        print("ERROR GET CODE:", e)
+        return jsonify({"error": "server_error"}), 500
 
     finally:
         cursor.close()
