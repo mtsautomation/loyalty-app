@@ -254,7 +254,7 @@ def login():
         if user:
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
-            session["cafe_id"] = user.get("cafe_id")
+            session["cafe_id"] = user["cafe_id"]
             return redirect("/cashier")
         else:
             return "Login incorrecto", 401
