@@ -7,6 +7,9 @@ import os
 import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
 from flask import session, redirect
+from datetime import datetime, timezone
+
+datetime.now(timezone.utc)
 
 
 
@@ -393,7 +396,13 @@ def logout():
 # -------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
+    try:
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            data = request.form.to_dict() or {}
+    except Exception as e:
+        print("❌ JSON parse error:", e)
+        data = {}
     print("📩", data)
 
     phone = normalize_phone(data.get("remote_phone_number"))
