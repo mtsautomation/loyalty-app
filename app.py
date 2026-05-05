@@ -21,7 +21,7 @@ app.secret_key = "super_secret_key"
 # 🔐 CONFIG
 # -------------------------
 API_KEY_2CHAT = os.environ.get("API_KEY_2CHAT")
-FROM_NUMBER = "529992922621"
+FROM_NUMBER = "529991900664"
 
 DB_CONFIG = {
     "host": os.environ.get("DB_HOST"),
