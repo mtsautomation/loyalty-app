@@ -396,6 +396,7 @@ def logout():
 # -------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    print("📩 RAW:", request.data)
     try:
         data = request.get_json(force=True, silent=True)
         if not data:
