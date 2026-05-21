@@ -8,6 +8,7 @@ import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
 from flask import session, redirect
 from datetime import datetime, timezone
+import secrets
 
 datetime.now(timezone.utc)
 
@@ -220,7 +221,7 @@ def get_active_code():
             remaining = int((result["expires_at"] - datetime.utcnow()).total_seconds())
             return jsonify({"code": result["code"], "expires_in": max(0, remaining)})
 
-        code = str(random.randint(1000, 9999))
+        code = secrets.token_hex(3).upper()
         expires_at = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
@@ -280,6 +281,7 @@ def cashier():
         return redirect("/login")
 
     branch_id = session.get("branch_id")
+    cafe_id = session["cafe_id"]
 
     return render_template_string(f"""
     <!DOCTYPE html>
