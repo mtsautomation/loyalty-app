@@ -583,6 +583,8 @@ def webhook():
         # =====================================================
 
         master = get_master_user(cursor, phone)
+        print("PHONE:", phone)
+        print("MASTER:", master)
 
         admin_state_data = get_admin_state(cursor, phone)
 
