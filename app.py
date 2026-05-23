@@ -615,6 +615,8 @@ def webhook():
             )
 
             response = "☕ Nombre de la cafetería:"
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_cafe_name":
 
@@ -629,6 +631,7 @@ def webhook():
             )
 
             response = "📍 Nombre de la primera sucursal:"
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_branch_name":
 
@@ -643,6 +646,8 @@ def webhook():
             )
 
             response = "🏠 Dirección de la sucursal:"
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_branch_address":
 
@@ -657,6 +662,8 @@ def webhook():
             )
 
             response = "👤 Username del admin:"
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_admin_username":
 
@@ -671,6 +678,8 @@ def webhook():
             )
 
             response = "🔐 Password del admin:"
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_admin_password":
 
@@ -685,6 +694,8 @@ def webhook():
             )
 
             response = "📱 Teléfono del admin:"
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and admin_state == "await_admin_phone":
 
@@ -723,6 +734,7 @@ def webhook():
         ✅ Cafetería creada
 
         ☕ {admin_temp['cafe_name']}
+        
 
         ✅ Sucursal creada
 
@@ -733,17 +745,17 @@ def webhook():
         👤 {admin_temp['admin_username']}
         📱 {admin_phone}
         """
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
 
         elif master and text == "cancelar":
 
             clear_admin_state(cursor, conn, phone)
 
             response = "❌ Flujo cancelado"
-
-        elif master and admin_state and response:
-
             send_whatsapp(phone, response)
             return jsonify({"status": "ok"}), 200
+
 
         # =====================================================
         # NORMAL CUSTOMER FLOW
