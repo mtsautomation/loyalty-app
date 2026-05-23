@@ -9,6 +9,7 @@ import requests.packages.urllib3.util.connection as urllib3_cn
 from flask import session, redirect
 from datetime import datetime, timezone
 import secrets
+import json
 
 datetime.now(timezone.utc)
 
@@ -21,6 +22,7 @@ urllib3_cn.allowed_gai_family = allowed_gai_family
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key"
+MASTER_ROLES = ["master"]
 # -------------------------
 # 🔐 CONFIG
 # -------------------------
@@ -187,7 +189,163 @@ def redeem_reward(cursor, conn, reward_id):
 
 def closing():
     return "\n\n👉 Para registrar otra compra escribe *hola*"
+# =====================================================
+# MASTER ADMIN HELPERS
+# =====================================================
 
+def get_master_user(cursor, phone):
+
+    cursor.execute("""
+        SELECT * FROM users
+        WHERE phone=%s
+        AND role='master'
+        LIMIT 1
+    """, (phone,))
+
+    return cursor.fetchone()
+
+# =====================================================
+# ADMIN STATES
+# =====================================================
+
+def get_admin_state(cursor, phone):
+
+    cursor.execute("""
+        SELECT * FROM admin_states
+        WHERE phone=%s
+        LIMIT 1
+    """, (phone,))
+
+    return cursor.fetchone()
+
+def save_admin_state(cursor, conn, phone, state, temp_data=None):
+
+    cursor.execute("""
+        SELECT id FROM admin_states
+        WHERE phone=%s
+        LIMIT 1
+    """, (phone,))
+
+    exists = cursor.fetchone()
+
+    temp_json = json.dumps(temp_data or {})
+
+    if exists:
+
+        cursor.execute("""
+            UPDATE admin_states
+            SET state=%s,
+                temp_data=%s,
+                updated_at=%s
+            WHERE phone=%s
+        """, (
+            state,
+            temp_json,
+            datetime.utcnow(),
+            phone
+        ))
+
+    else:
+
+        cursor.execute("""
+            INSERT INTO admin_states
+            (phone, state, temp_data, updated_at)
+            VALUES (%s,%s,%s,%s)
+        """, (
+            phone,
+            state,
+            temp_json,
+            datetime.utcnow()
+        ))
+
+    conn.commit()
+
+def clear_admin_state(cursor, conn, phone):
+
+    cursor.execute("""
+        DELETE FROM admin_states
+        WHERE phone=%s
+    """, (phone,))
+
+    conn.commit()
+
+# =====================================================
+# CREATE CAFE
+# =====================================================
+
+def create_cafe(cursor, conn, name):
+
+    cursor.execute("""
+        INSERT INTO cafes (name, created_at)
+        VALUES (%s,%s)
+    """, (
+        name,
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+
+    return cursor.lastrowid
+
+# =====================================================
+# CREATE BRANCH
+# =====================================================
+
+def create_branch(cursor, conn, cafe_id, name, address):
+
+    cursor.execute("""
+        INSERT INTO branches
+        (name, address, cafe_id, created_at)
+        VALUES (%s,%s,%s,%s)
+    """, (
+        name,
+        address,
+        cafe_id,
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+
+    return cursor.lastrowid
+
+# =====================================================
+# CREATE USER
+# =====================================================
+
+def create_user(
+    cursor,
+    conn,
+    username,
+    password,
+    phone,
+    role,
+    cafe_id,
+    branch_id
+):
+
+    cursor.execute("""
+        INSERT INTO users
+        (
+            username,
+            password,
+            phone,
+            role,
+            cafe_id,
+            branch_id,
+            created_at
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+    """, (
+        username,
+        password,
+        phone,
+        role,
+        cafe_id,
+        branch_id,
+        datetime.utcnow()
+    ))
+
+    conn.commit()
 # -------------------------
 # 🔐 ACTIVE CODE
 # -------------------------
@@ -418,11 +576,180 @@ def webhook():
     cursor = conn.cursor(dictionary=True)
 
     try:
+
+        response = ""
+        # =====================================================
+        # MASTER FLOW
+        # =====================================================
+
+        master = get_master_user(cursor, phone)
+
+        admin_state_data = get_admin_state(cursor, phone)
+
+        admin_state = None
+        admin_temp = {}
+
+        if admin_state_data:
+
+            admin_state = admin_state_data["state"]
+
+            if admin_state_data["temp_data"]:
+                admin_temp = json.loads(
+                    admin_state_data["temp_data"]
+                )
+
+        # =====================================================
+        # START MASTER FLOW
+        # =====================================================
+
+        if master and text == "alta cafeteria":
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_cafe_name",
+                {}
+            )
+
+            response = "☕ Nombre de la cafetería:"
+
+        elif master and admin_state == "await_cafe_name":
+
+            admin_temp["cafe_name"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_branch_name",
+                admin_temp
+            )
+
+            response = "📍 Nombre de la primera sucursal:"
+
+        elif master and admin_state == "await_branch_name":
+
+            admin_temp["branch_name"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_branch_address",
+                admin_temp
+            )
+
+            response = "🏠 Dirección de la sucursal:"
+
+        elif master and admin_state == "await_branch_address":
+
+            admin_temp["branch_address"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_admin_username",
+                admin_temp
+            )
+
+            response = "👤 Username del admin:"
+
+        elif master and admin_state == "await_admin_username":
+
+            admin_temp["admin_username"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_admin_password",
+                admin_temp
+            )
+
+            response = "🔐 Password del admin:"
+
+        elif master and admin_state == "await_admin_password":
+
+            admin_temp["admin_password"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_admin_phone",
+                admin_temp
+            )
+
+            response = "📱 Teléfono del admin:"
+
+        elif master and admin_state == "await_admin_phone":
+
+            admin_phone = normalize_phone(text)
+
+            admin_temp["admin_phone"] = admin_phone
+
+            cafe_id = create_cafe(
+                cursor,
+                conn,
+                admin_temp["cafe_name"]
+            )
+
+            branch_id = create_branch(
+                cursor,
+                conn,
+                cafe_id,
+                admin_temp["branch_name"],
+                admin_temp["branch_address"]
+            )
+
+            create_user(
+                cursor,
+                conn,
+                admin_temp["admin_username"],
+                admin_temp["admin_password"],
+                admin_phone,
+                "admin",
+                cafe_id,
+                branch_id
+            )
+
+            clear_admin_state(cursor, conn, phone)
+
+            response = f"""
+        ✅ Cafetería creada
+
+        ☕ {admin_temp['cafe_name']}
+
+        ✅ Sucursal creada
+
+        📍 {admin_temp['branch_name']}
+
+        ✅ Admin creado
+
+        👤 {admin_temp['admin_username']}
+        📱 {admin_phone}
+        """
+
+        elif master and text == "cancelar":
+
+            clear_admin_state(cursor, conn, phone)
+
+            response = "❌ Flujo cancelado"
+
+        elif master and admin_state and response:
+
+            send_whatsapp(phone, response)
+            return jsonify({"status": "ok"}), 200
+
+        # =====================================================
+        # NORMAL CUSTOMER FLOW
+        # =====================================================
         customer = get_customer(cursor, phone)
         customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
         state = customer.get("state") if customer else None
-        response = ""
 
         # STATUS + HISTORIAL
         if text in ["status", "puntos"]:
