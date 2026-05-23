@@ -618,6 +618,10 @@ def webhook():
             return jsonify({"status": "cancelled"}), 200
 
 
+        # =====================================================
+        # CREATE NEW CAFE
+        # =====================================================
+
         # ---------------------------------
         # START FLOW
         # ---------------------------------
@@ -649,11 +653,53 @@ def webhook():
                 cursor,
                 conn,
                 phone,
+                "await_branch_count",
+                admin_temp
+            )
+
+            response = "🏢 ¿Cuántas sucursales tendrá?"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # BRANCH COUNT
+        # ---------------------------------
+        elif master and admin_state == "await_branch_count":
+
+            if not text.isdigit():
+                send_whatsapp(
+                    phone,
+                    "❌ Debes enviar un número"
+                )
+
+                return jsonify({"status": "invalid"}), 200
+
+            branch_count = int(text)
+
+            if branch_count <= 0:
+                send_whatsapp(
+                    phone,
+                    "❌ Número inválido"
+                )
+
+                return jsonify({"status": "invalid"}), 200
+
+            admin_temp["branch_count"] = branch_count
+            admin_temp["current_branch"] = 1
+            admin_temp["branches"] = []
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
                 "await_branch_name",
                 admin_temp
             )
 
-            response = "📍 Nombre de la primera sucursal:"
+            response = "📍 Nombre de sucursal #1:"
 
             send_whatsapp(phone, response)
 
@@ -665,7 +711,7 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_branch_name":
 
-            admin_temp["branch_name"] = text
+            admin_temp["temp_branch_name"] = text
 
             save_admin_state(
                 cursor,
@@ -675,7 +721,9 @@ def webhook():
                 admin_temp
             )
 
-            response = "🏠 Dirección de la sucursal:"
+            response = f"""
+        🏠 Dirección de sucursal #{admin_temp['current_branch']}:
+        """
 
             send_whatsapp(phone, response)
 
@@ -687,8 +735,39 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_branch_address":
 
-            admin_temp["branch_address"] = text
+            branch_data = {
+                "name": admin_temp["temp_branch_name"],
+                "address": text
+            }
 
+            admin_temp["branches"].append(branch_data)
+
+            current = admin_temp["current_branch"]
+            total = admin_temp["branch_count"]
+
+            # MORE BRANCHES
+            if current < total:
+                admin_temp["current_branch"] += 1
+
+                save_admin_state(
+                    cursor,
+                    conn,
+                    phone,
+                    "await_branch_name",
+                    admin_temp
+                )
+
+                response = f"""
+        ✅ Sucursal #{current} guardada
+
+        📍 Nombre de sucursal #{admin_temp['current_branch']}:
+        """
+
+                send_whatsapp(phone, response)
+
+                return jsonify({"status": "ok"}), 200
+
+            # FINISHED BRANCHES
             save_admin_state(
                 cursor,
                 conn,
@@ -709,7 +788,6 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_admin_username":
 
-            # CHECK DUPLICATE USERNAME
             cursor.execute(
                 "SELECT id FROM users WHERE username=%s",
                 (text,)
@@ -720,10 +798,10 @@ def webhook():
             if existing_user:
                 send_whatsapp(
                     phone,
-                    "❌ Username ya existe. Escribe otro."
+                    "❌ Username ya existe"
                 )
 
-                return jsonify({"status": "duplicate username"}), 200
+                return jsonify({"status": "duplicate"}), 200
 
             admin_temp["admin_username"] = text
 
@@ -771,7 +849,6 @@ def webhook():
 
             admin_phone = normalize_phone(text)
 
-            # CHECK DUPLICATE PHONE
             cursor.execute(
                 "SELECT id FROM users WHERE phone=%s",
                 (admin_phone,)
@@ -782,10 +859,10 @@ def webhook():
             if existing_phone:
                 send_whatsapp(
                     phone,
-                    "❌ Teléfono ya registrado."
+                    "❌ Teléfono ya registrado"
                 )
 
-                return jsonify({"status": "duplicate phone"}), 200
+                return jsonify({"status": "duplicate"}), 200
 
             admin_temp["admin_phone"] = admin_phone
 
@@ -802,8 +879,6 @@ def webhook():
 
         • admin
         • cashier
-
-        Escribe el rol:
         """
 
             send_whatsapp(phone, response)
@@ -821,7 +896,7 @@ def webhook():
             if text not in allowed_roles:
                 send_whatsapp(
                     phone,
-                    "❌ Rol inválido.\nUsa: admin o cashier"
+                    "❌ Rol inválido"
                 )
 
                 return jsonify({"status": "invalid role"}), 200
@@ -836,17 +911,22 @@ def webhook():
                 admin_temp
             )
 
+            branch_text = ""
+
+            for i, branch in enumerate(admin_temp["branches"], start=1):
+                branch_text += f"""
+        {i}. {branch['name']}
+        📌 {branch['address']}
+        """
+
             response = f"""
         📋 CONFIRMAR DATOS
 
         ☕ Cafetería:
         {admin_temp['cafe_name']}
 
-        📍 Sucursal:
-        {admin_temp['branch_name']}
-
-        🏠 Dirección:
-        {admin_temp['branch_address']}
+        🏢 Sucursales:
+        {branch_text}
 
         👤 Usuario:
         {admin_temp['admin_username']}
@@ -860,13 +940,10 @@ def webhook():
         🛡️ Rol:
         {admin_temp['role']}
 
-        --------------------------------
+        ----------------------------
 
-        ✅ Escribe:
-        confirmar
-
-        ❌ O escribe:
-        cancelar
+        ✅ confirmar
+        ❌ cancelar
         """
 
             send_whatsapp(phone, response)
@@ -885,7 +962,7 @@ def webhook():
                     "❌ Debes escribir confirmar o cancelar"
                 )
 
-                return jsonify({"status": "waiting confirmation"}), 200
+                return jsonify({"status": "waiting"}), 200
 
             # CREATE CAFE
             cafe_id = create_cafe(
@@ -894,14 +971,21 @@ def webhook():
                 admin_temp["cafe_name"]
             )
 
-            # CREATE BRANCH
-            branch_id = create_branch(
-                cursor,
-                conn,
-                cafe_id,
-                admin_temp["branch_name"],
-                admin_temp["branch_address"]
-            )
+            # CREATE BRANCHES
+            first_branch_id = None
+
+            for branch in admin_temp["branches"]:
+
+                new_branch_id = create_branch(
+                    cursor,
+                    conn,
+                    cafe_id,
+                    branch["name"],
+                    branch["address"]
+                )
+
+                if first_branch_id is None:
+                    first_branch_id = new_branch_id
 
             # CREATE USER
             create_user(
@@ -912,25 +996,21 @@ def webhook():
                 admin_temp["admin_phone"],
                 admin_temp["role"],
                 cafe_id,
-                branch_id
+                first_branch_id
             )
 
             clear_admin_state(cursor, conn, phone)
 
             response = f"""
-        ✅ Alta completada
+        ✅ Cafetería creada
 
-        ☕ Cafetería:
-        {admin_temp['cafe_name']}
+        ☕ {admin_temp['cafe_name']}
 
-        📍 Sucursal:
-        {admin_temp['branch_name']}
+        🏢 Sucursales creadas:
+        {len(admin_temp['branches'])}
 
         👤 Usuario:
         {admin_temp['admin_username']}
-
-        📱 Teléfono:
-        {admin_temp['admin_phone']}
 
         🛡️ Rol:
         {admin_temp['role']}
@@ -939,6 +1019,137 @@ def webhook():
             send_whatsapp(phone, response)
 
             return jsonify({"status": "created"}), 200
+
+
+        # =====================================================
+        # ADD NEW BRANCH TO EXISTING CAFE
+        # =====================================================
+
+        # ---------------------------------
+        # START ADD BRANCH
+        # ---------------------------------
+        elif master and text == "agregar sucursal":
+
+            cursor.execute("""
+                SELECT id, name
+                FROM cafes
+                ORDER BY id
+            """)
+
+            cafes = cursor.fetchall()
+
+            if not cafes:
+                send_whatsapp(
+                    phone,
+                    "❌ No existen cafeterías"
+                )
+
+                return jsonify({"status": "no cafes"}), 200
+
+            cafe_text = ""
+
+            for cafe in cafes:
+                cafe_text += f"""
+        {cafe['id']} - {cafe['name']}
+        """
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_upgrade_cafe",
+                {}
+            )
+
+            response = f"""
+        ☕ Selecciona ID de cafetería:
+
+        {cafe_text}
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # SELECT CAFE
+        # ---------------------------------
+        elif master and admin_state == "await_upgrade_cafe":
+
+            if not text.isdigit():
+                send_whatsapp(
+                    phone,
+                    "❌ Debes enviar un ID válido"
+                )
+
+                return jsonify({"status": "invalid"}), 200
+
+            cafe_id = int(text)
+
+            admin_temp["upgrade_cafe_id"] = cafe_id
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_branch_name",
+                admin_temp
+            )
+
+            response = "📍 Nombre de nueva sucursal:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # NEW BRANCH NAME
+        # ---------------------------------
+        elif master and admin_state == "await_new_branch_name":
+
+            admin_temp["new_branch_name"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_branch_address",
+                admin_temp
+            )
+
+            response = "🏠 Dirección de nueva sucursal:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # CREATE NEW BRANCH
+        # ---------------------------------
+        elif master and admin_state == "await_new_branch_address":
+
+            create_branch(
+                cursor,
+                conn,
+                admin_temp["upgrade_cafe_id"],
+                admin_temp["new_branch_name"],
+                text
+            )
+
+            clear_admin_state(cursor, conn, phone)
+
+            response = f"""
+        ✅ Nueva sucursal agregada
+
+        📍 {admin_temp['new_branch_name']}
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "branch added"}), 200
         # =====================================================
         # NORMAL CUSTOMER FLOW
         # =====================================================
