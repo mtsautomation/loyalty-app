@@ -604,7 +604,24 @@ def webhook():
         # START MASTER FLOW
         # =====================================================
 
-        if master and text == "alta cafeteria":
+        # ---------------------------------
+        # CANCEL FLOW
+        # ---------------------------------
+        if master and text == "cancelar":
+
+            clear_admin_state(cursor, conn, phone)
+
+            response = "❌ Flujo cancelado"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "cancelled"}), 200
+
+
+        # ---------------------------------
+        # START FLOW
+        # ---------------------------------
+        elif master and text == "alta cafeteria":
 
             save_admin_state(
                 cursor,
@@ -615,9 +632,15 @@ def webhook():
             )
 
             response = "☕ Nombre de la cafetería:"
+
             send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # CAFE NAME
+        # ---------------------------------
         elif master and admin_state == "await_cafe_name":
 
             admin_temp["cafe_name"] = text
@@ -631,8 +654,15 @@ def webhook():
             )
 
             response = "📍 Nombre de la primera sucursal:"
+
+            send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # BRANCH NAME
+        # ---------------------------------
         elif master and admin_state == "await_branch_name":
 
             admin_temp["branch_name"] = text
@@ -646,9 +676,15 @@ def webhook():
             )
 
             response = "🏠 Dirección de la sucursal:"
+
             send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # BRANCH ADDRESS
+        # ---------------------------------
         elif master and admin_state == "await_branch_address":
 
             admin_temp["branch_address"] = text
@@ -661,11 +697,33 @@ def webhook():
                 admin_temp
             )
 
-            response = "👤 Username del admin:"
+            response = "👤 Username del usuario:"
+
             send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # USERNAME
+        # ---------------------------------
         elif master and admin_state == "await_admin_username":
+
+            # CHECK DUPLICATE USERNAME
+            cursor.execute(
+                "SELECT id FROM users WHERE username=%s",
+                (text,)
+            )
+
+            existing_user = cursor.fetchone()
+
+            if existing_user:
+                send_whatsapp(
+                    phone,
+                    "❌ Username ya existe. Escribe otro."
+                )
+
+                return jsonify({"status": "duplicate username"}), 200
 
             admin_temp["admin_username"] = text
 
@@ -677,10 +735,16 @@ def webhook():
                 admin_temp
             )
 
-            response = "🔐 Password del admin:"
+            response = "🔐 Password del usuario:"
+
             send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # PASSWORD
+        # ---------------------------------
         elif master and admin_state == "await_admin_password":
 
             admin_temp["admin_password"] = text
@@ -693,22 +757,144 @@ def webhook():
                 admin_temp
             )
 
-            response = "📱 Teléfono del admin:"
+            response = "📱 Teléfono del usuario:"
+
             send_whatsapp(phone, response)
+
             return jsonify({"status": "ok"}), 200
 
+
+        # ---------------------------------
+        # PHONE
+        # ---------------------------------
         elif master and admin_state == "await_admin_phone":
 
             admin_phone = normalize_phone(text)
 
+            # CHECK DUPLICATE PHONE
+            cursor.execute(
+                "SELECT id FROM users WHERE phone=%s",
+                (admin_phone,)
+            )
+
+            existing_phone = cursor.fetchone()
+
+            if existing_phone:
+                send_whatsapp(
+                    phone,
+                    "❌ Teléfono ya registrado."
+                )
+
+                return jsonify({"status": "duplicate phone"}), 200
+
             admin_temp["admin_phone"] = admin_phone
 
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_role",
+                admin_temp
+            )
+
+            response = """
+        👤 Selecciona rol:
+
+        • admin
+        • cashier
+
+        Escribe el rol:
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # ROLE
+        # ---------------------------------
+        elif master and admin_state == "await_role":
+
+            allowed_roles = ["admin", "cashier"]
+
+            if text not in allowed_roles:
+                send_whatsapp(
+                    phone,
+                    "❌ Rol inválido.\nUsa: admin o cashier"
+                )
+
+                return jsonify({"status": "invalid role"}), 200
+
+            admin_temp["role"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "confirm_create",
+                admin_temp
+            )
+
+            response = f"""
+        📋 CONFIRMAR DATOS
+
+        ☕ Cafetería:
+        {admin_temp['cafe_name']}
+
+        📍 Sucursal:
+        {admin_temp['branch_name']}
+
+        🏠 Dirección:
+        {admin_temp['branch_address']}
+
+        👤 Usuario:
+        {admin_temp['admin_username']}
+
+        📱 Teléfono:
+        {admin_temp['admin_phone']}
+
+        🔐 Password:
+        {admin_temp['admin_password']}
+
+        🛡️ Rol:
+        {admin_temp['role']}
+
+        --------------------------------
+
+        ✅ Escribe:
+        confirmar
+
+        ❌ O escribe:
+        cancelar
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # FINAL CONFIRMATION
+        # ---------------------------------
+        elif master and admin_state == "confirm_create":
+
+            if text != "confirmar":
+                send_whatsapp(
+                    phone,
+                    "❌ Debes escribir confirmar o cancelar"
+                )
+
+                return jsonify({"status": "waiting confirmation"}), 200
+
+            # CREATE CAFE
             cafe_id = create_cafe(
                 cursor,
                 conn,
                 admin_temp["cafe_name"]
             )
 
+            # CREATE BRANCH
             branch_id = create_branch(
                 cursor,
                 conn,
@@ -717,13 +903,14 @@ def webhook():
                 admin_temp["branch_address"]
             )
 
+            # CREATE USER
             create_user(
                 cursor,
                 conn,
                 admin_temp["admin_username"],
                 admin_temp["admin_password"],
-                admin_phone,
-                "admin",
+                admin_temp["admin_phone"],
+                admin_temp["role"],
                 cafe_id,
                 branch_id
             )
@@ -731,32 +918,27 @@ def webhook():
             clear_admin_state(cursor, conn, phone)
 
             response = f"""
-        ✅ Cafetería creada
+        ✅ Alta completada
 
-        ☕ {admin_temp['cafe_name']}
-        
+        ☕ Cafetería:
+        {admin_temp['cafe_name']}
 
-        ✅ Sucursal creada
+        📍 Sucursal:
+        {admin_temp['branch_name']}
 
-        📍 {admin_temp['branch_name']}
+        👤 Usuario:
+        {admin_temp['admin_username']}
 
-        ✅ Admin creado
+        📱 Teléfono:
+        {admin_temp['admin_phone']}
 
-        👤 {admin_temp['admin_username']}
-        📱 {admin_phone}
+        🛡️ Rol:
+        {admin_temp['role']}
         """
+
             send_whatsapp(phone, response)
-            return jsonify({"status": "ok"}), 200
 
-        elif master and text == "cancelar":
-
-            clear_admin_state(cursor, conn, phone)
-
-            response = "❌ Flujo cancelado"
-            send_whatsapp(phone, response)
-            return jsonify({"status": "ok"}), 200
-
-
+            return jsonify({"status": "created"}), 200
         # =====================================================
         # NORMAL CUSTOMER FLOW
         # =====================================================
