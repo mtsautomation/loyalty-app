@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import random
 import requests
 import os
+import secrets
+
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key_admin"
@@ -46,7 +48,7 @@ def send_whatsapp(phone, message):
 def login():
 
     if request.method == "POST":
-        username = request.form.get("username")
+        username = request.form.get("username").lower().strip()
 
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
@@ -55,6 +57,8 @@ def login():
         user = cursor.fetchone()
 
         if not user:
+            cursor.close()
+            conn.close()
             return "Usuario no existe", 404
 
         otp = str(random.randint(1000, 9999))
@@ -177,7 +181,6 @@ def verify():
 
     if not session.get("temp_user"):
         return redirect("/")
-
     if request.method == "POST":
         otp = request.form.get("otp")
 
@@ -188,12 +191,26 @@ def verify():
         user = cursor.fetchone()
 
         if user and user["reset_code"] == otp and user["reset_expires"] > datetime.utcnow():
+            cursor.execute("""
+                UPDATE users
+                SET reset_code=NULL,
+                    reset_expires=NULL
+                WHERE id=%s
+            """, (user["id"],))
+
+            conn.commit()
+
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
             session["cafe_id"] = user["cafe_id"]
+            session["role"] = user["role"]
+
             session.pop("temp_user", None)
+
             return redirect("/admin/cashier")
 
+        cursor.close()
+        conn.close()
         return "OTP incorrecto", 401
 
     return """
@@ -267,9 +284,25 @@ def verify():
 # -------------------------
 @app.route("/admin/cashier")
 def cashier():
-
     if not session.get("user_id"):
         return redirect("/")
+
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT role
+        FROM users
+        WHERE id=%s
+    """, (session["user_id"],))
+
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if not user or user["role"] not in ["admin", "cashier", "master"]:
+        return "No autorizado", 403
 
     return render_template_string("""
     <!DOCTYPE html>
@@ -381,19 +414,22 @@ def cashier():
     }
 
     function tick(){
-        seconds--;
-
-        let el = document.getElementById("timer");
-        el.innerText = "Expira en " + seconds + "s";
-
-        if(seconds < 10){
-            el.className = "danger";
-        } else {
-            el.className = "";
-        }
 
         if(seconds <= 0){
             load();
+            return;
+        }
+
+        seconds--;
+
+        let el = document.getElementById("timer");
+
+        el.innerText = "Expira en " + seconds + "s";
+
+        if(seconds <= 10){
+            el.className = "danger";
+        } else {
+            el.className = "";
         }
     }
 
@@ -439,7 +475,7 @@ def get_code():
                 "expires_in": max(0, remaining)
             })
 
-        new_code = str(random.randint(1000, 9999))
+        new_code = secrets.token_hex(4).upper()
         expiry = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""

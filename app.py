@@ -1,15 +1,17 @@
 from flask import Flask, request, jsonify, render_template_string
 import mysql.connector
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import requests
 import os
 import socket
 import requests.packages.urllib3.util.connection as urllib3_cn
 from flask import session, redirect
-from datetime import datetime, timezone
 import secrets
 import json
+from werkzeug.security import generate_password_hash, check_password_hash
+import re
+
 
 datetime.now(timezone.utc)
 
@@ -41,16 +43,26 @@ def get_db():
 
 # -------------------------
 # 📱 NORMALIZE PHONE
-# -------------------------
 def normalize_phone(phone):
+
     if not phone:
         return None
-    phone = phone.replace("+", "").replace(" ", "").strip()
-    if phone.startswith("52"):
-        return phone
+
+    phone = re.sub(r"\D", "", phone)
+
     if len(phone) == 10:
-        return "52" + phone
+        phone = "52" + phone
+
     return phone
+def normalize_name(name):
+
+    name = name.lower().strip()
+
+    name = re.sub(r"\s+", "", name)
+
+    name = re.sub(r"[^a-z0-9]", "", name)
+
+    return name
 
 # -------------------------
 # 📲 SEND WHATSAPP
@@ -213,6 +225,7 @@ def get_admin_state(cursor, phone):
     cursor.execute("""
         SELECT * FROM admin_states
         WHERE phone=%s
+        AND updated_at > NOW() - INTERVAL 30 MINUTE
         LIMIT 1
     """, (phone,))
 
@@ -291,16 +304,41 @@ def create_cafe(cursor, conn, name):
 # CREATE BRANCH
 # =====================================================
 
-def create_branch(cursor, conn, cafe_id, name, address):
-
+def create_branch(
+    cursor,
+    conn,
+    cafe_id,
+    name,
+    address,
+    street=None,
+    neighborhood=None,
+    zip_code=None,
+    city=None,
+    state_name=None
+):
     cursor.execute("""
         INSERT INTO branches
-        (name, address, cafe_id, created_at)
-        VALUES (%s,%s,%s,%s)
+        (
+            name,
+            address,
+            cafe_id,
+            street,
+            neighborhood,
+            zip_code,
+            city,
+            state_name,
+            created_at
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         name,
         address,
         cafe_id,
+        street,
+        neighborhood,
+        zip_code,
+        city,
+        state_name,
         datetime.utcnow()
     ))
 
@@ -323,6 +361,8 @@ def create_user(
     branch_id
 ):
 
+    hashed_password = generate_password_hash(password)
+
     cursor.execute("""
         INSERT INTO users
         (
@@ -337,7 +377,7 @@ def create_user(
         VALUES (%s,%s,%s,%s,%s,%s,%s)
     """, (
         username,
-        password,
+        hashed_password,
         phone,
         role,
         cafe_id,
@@ -369,7 +409,10 @@ def get_active_code():
 
         cursor.execute("""
             SELECT code, expires_at FROM cashier_codes
-            WHERE branch_id=%s AND cafe_id=%s AND used=0
+            WHERE branch_id=%s
+            AND cafe_id=%s
+            AND used=0
+            AND expires_at > NOW()
             ORDER BY id DESC LIMIT 1
         """, (branch_id, cafe_id))
 
@@ -379,7 +422,7 @@ def get_active_code():
             remaining = int((result["expires_at"] - datetime.utcnow()).total_seconds())
             return jsonify({"code": result["code"], "expires_in": max(0, remaining)})
 
-        code = secrets.token_hex(3).upper()
+        code = secrets.token_hex(4).upper()
         expires_at = datetime.utcnow() + timedelta(seconds=60)
 
         cursor.execute("""
@@ -405,18 +448,19 @@ def login():
 
         cursor.execute("""
             SELECT * FROM users 
-            WHERE username=%s AND password=%s
-        """, (username, password))
+            WHERE username=%s
+        """, (username,))
 
         user = cursor.fetchone()
 
         cursor.close()
         conn.close()
 
-        if user:
+        if user and check_password_hash(user["password"], password):
             session["user_id"] = user["id"]
             session["branch_id"] = user["branch_id"]
             session["cafe_id"] = user["cafe_id"]
+            session["role"] = user["role"]
             return redirect("/cashier")
         else:
             return "Login incorrecto", 401
@@ -434,9 +478,11 @@ def login():
 # -------------------------
 @app.route("/cashier")
 def cashier():
-
     if not session.get("user_id"):
         return redirect("/login")
+
+    if session.get("role") not in ["admin", "cashier", "master"]:
+        return "No autorizado", 403
 
     branch_id = session.get("branch_id")
     cafe_id = session["cafe_id"]
@@ -567,7 +613,9 @@ def webhook():
     print("📩", data)
 
     phone = normalize_phone(data.get("remote_phone_number"))
-    text = data.get("message", {}).get("text", "").strip().lower()
+
+    raw_text = data.get("message", {}).get("text", "").strip()
+    text = raw_text.lower()
 
     if not phone:
         return jsonify({"status": "no phone"}), 200
@@ -646,6 +694,29 @@ def webhook():
         # CAFE NAME
         # ---------------------------------
         elif master and admin_state == "await_cafe_name":
+            normalized_input = normalize_name(text)
+
+            cursor.execute("""
+                SELECT id, name FROM cafes
+            """)
+
+            cafes = cursor.fetchall()
+
+            existing_cafe = None
+
+            for cafe in cafes:
+
+                if normalize_name(cafe["name"]) == normalized_input:
+                    existing_cafe = cafe
+                    break
+
+            if existing_cafe:
+                send_whatsapp(
+                    phone,
+                    "❌ Ya existe una cafetería con ese nombre."
+                )
+
+                return jsonify({"status": "duplicate cafe"}), 200
 
             admin_temp["cafe_name"] = text
 
@@ -735,9 +806,57 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_branch_address":
 
+            admin_temp["temp_street"] = raw_text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_branch_neighborhood",
+                admin_temp
+            )
+
+            response = "🏘️ Colonia:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        elif master and admin_state == "await_branch_neighborhood":
+
+            admin_temp["temp_neighborhood"] = raw_text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_branch_zipcode",
+                admin_temp
+            )
+
+            response = "📮 Código postal:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+        elif master and admin_state == "await_branch_zipcode":
+
+            admin_temp["temp_zipcode"] = raw_text
+
+            full_address = f"""
+        Calle: {admin_temp['temp_street']}
+        Colonia: {admin_temp['temp_neighborhood']}
+        CP: {admin_temp['temp_zipcode']}
+        """
+
             branch_data = {
                 "name": admin_temp["temp_branch_name"],
-                "address": text
+                "address": full_address,
+                "street": admin_temp["temp_street"],
+                "neighborhood": admin_temp["temp_neighborhood"],
+                "zip_code": admin_temp["temp_zipcode"]
             }
 
             admin_temp["branches"].append(branch_data)
@@ -745,7 +864,6 @@ def webhook():
             current = admin_temp["current_branch"]
             total = admin_temp["branch_count"]
 
-            # MORE BRANCHES
             if current < total:
                 admin_temp["current_branch"] += 1
 
@@ -760,14 +878,13 @@ def webhook():
                 response = f"""
         ✅ Sucursal #{current} guardada
 
-        📍 Nombre de sucursal #{admin_temp['current_branch']}:
+        📍 Nombre sucursal #{admin_temp['current_branch']}:
         """
 
                 send_whatsapp(phone, response)
 
                 return jsonify({"status": "ok"}), 200
 
-            # FINISHED BRANCHES
             save_admin_state(
                 cursor,
                 conn,
@@ -782,11 +899,12 @@ def webhook():
 
             return jsonify({"status": "ok"}), 200
 
-
         # ---------------------------------
         # USERNAME
         # ---------------------------------
         elif master and admin_state == "await_admin_username":
+
+            text = text.lower().strip()
 
             cursor.execute(
                 "SELECT id FROM users WHERE username=%s",
@@ -825,7 +943,7 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_admin_password":
 
-            admin_temp["admin_password"] = text
+            admin_temp["admin_password"] = raw_text
 
             save_admin_state(
                 cursor,
@@ -981,7 +1099,10 @@ def webhook():
                     conn,
                     cafe_id,
                     branch["name"],
-                    branch["address"]
+                    branch["address"],
+                    branch.get("street"),
+                    branch.get("neighborhood"),
+                    branch.get("zip_code")
                 )
 
                 if first_branch_id is None:
@@ -1150,9 +1271,331 @@ def webhook():
             send_whatsapp(phone, response)
 
             return jsonify({"status": "branch added"}), 200
+        elif master and text == "alta usuario":
+
+            cursor.execute("""
+                SELECT id, name
+                FROM cafes
+                ORDER BY name
+            """)
+
+            cafes = cursor.fetchall()
+
+            if not cafes:
+                send_whatsapp(
+                    phone,
+                    "❌ No existen cafeterías"
+                )
+
+                return jsonify({"status": "no cafes"}), 200
+
+            cafe_text = ""
+
+            for cafe in cafes:
+                cafe_text += f"""
+        {cafe['id']} - {cafe['name']}
+        """
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_user_cafe",
+                {}
+            )
+
+            response = f"""
+        ☕ Selecciona cafetería:
+
+        {cafe_text}
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+        # ---------------------------------
+        # SELECT USER CAFE
+        # ---------------------------------
+        elif master and admin_state == "await_user_cafe":
+
+            if not text.isdigit():
+                send_whatsapp(
+                    phone,
+                    "❌ ID inválido"
+                )
+
+                return jsonify({"status": "invalid"}), 200
+
+            cafe_id = int(text)
+
+            cursor.execute("""
+                SELECT id, name
+                FROM cafes
+                WHERE id=%s
+                LIMIT 1
+            """, (cafe_id,))
+
+            cafe = cursor.fetchone()
+
+            if not cafe:
+                send_whatsapp(
+                    phone,
+                    "❌ Cafetería no encontrada"
+                )
+
+                return jsonify({"status": "not found"}), 200
+
+            admin_temp["selected_cafe"] = cafe_id
+
+            cursor.execute("""
+                SELECT id, name
+                FROM branches
+                WHERE cafe_id=%s
+                ORDER BY name
+            """, (cafe_id,))
+
+            branches = cursor.fetchall()
+
+            if not branches:
+                send_whatsapp(
+                    phone,
+                    "❌ Esta cafetería no tiene sucursales"
+                )
+
+                return jsonify({"status": "no branches"}), 200
+
+            branch_text = ""
+
+            for branch in branches:
+                branch_text += f"""
+        {branch['id']} - {branch['name']}
+        """
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_user_branch",
+                admin_temp
+            )
+
+            response = f"""
+        🏢 Selecciona sucursal:
+
+        {branch_text}
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+# ---------------------------------
+# SELECT USER BRANCH
+# ---------------------------------
+        elif master and admin_state == "await_user_branch":
+
+            if not text.isdigit():
+                send_whatsapp(phone, "❌ ID inválido")
+                return jsonify({"status": "invalid"}), 200
+
+            branch_id = int(text)
+
+            cursor.execute("""
+                SELECT id, name
+                FROM branches
+                WHERE id=%s
+                AND cafe_id=%s
+                LIMIT 1
+            """, (
+                branch_id,
+                admin_temp["selected_cafe"]
+            ))
+
+            branch = cursor.fetchone()
+
+            if not branch:
+                send_whatsapp(
+                    phone,
+                    "❌ Sucursal inválida"
+                )
+
+                return jsonify({"status": "invalid branch"}), 200
+
+            admin_temp["selected_branch"] = branch_id
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_username",
+                admin_temp
+            )
+
+            response = "👤 Username del usuario:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+# ---------------------------------
+# NEW USERNAME
+# ---------------------------------
+        elif master and admin_state == "await_new_username":
+
+            text = text.lower().strip()
+
+            cursor.execute(
+                "SELECT id FROM users WHERE username=%s",
+                (text,)
+            )
+
+            existing_user = cursor.fetchone()
+
+            if existing_user:
+                send_whatsapp(
+                    phone,
+                    "❌ Username ya existe"
+                )
+
+                return jsonify({"status": "duplicate"}), 200
+
+            admin_temp["new_username"] = text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_password",
+                admin_temp
+            )
+
+            response = "🔐 Password del usuario:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+# ---------------------------------
+# NEW PASSWORD
+# ---------------------------------
+        elif master and admin_state == "await_new_password":
+
+            admin_temp["new_password"] = raw_text
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_phone",
+                admin_temp
+            )
+
+            response = "📱 Teléfono del usuario:"
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+# ---------------------------------
+# NEW PHONE
+# ---------------------------------
+        elif master and admin_state == "await_new_phone":
+
+            new_phone = normalize_phone(text)
+
+            cursor.execute(
+                "SELECT id FROM users WHERE phone=%s",
+                (new_phone,)
+            )
+
+            existing_phone = cursor.fetchone()
+
+            if existing_phone:
+                send_whatsapp(
+                    phone,
+                    "❌ Teléfono ya registrado"
+                )
+
+                return jsonify({"status": "duplicate"}), 200
+
+            admin_temp["new_phone"] = new_phone
+
+            save_admin_state(
+                cursor,
+                conn,
+                phone,
+                "await_new_role",
+                admin_temp
+            )
+
+            response = """
+        👤 Selecciona rol:
+
+        • admin
+        • cashier
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "ok"}), 200
+
+
+        # ---------------------------------
+        # NEW ROLE + CREATE USER
+        # ---------------------------------
+        elif master and admin_state == "await_new_role":
+
+            allowed_roles = ["admin", "cashier"]
+
+            if text not in allowed_roles:
+                send_whatsapp(
+                    phone,
+                    "❌ Rol inválido"
+                )
+
+                return jsonify({"status": "invalid"}), 200
+
+            admin_temp["new_role"] = text
+
+            create_user(
+                cursor,
+                conn,
+                admin_temp["new_username"],
+                admin_temp["new_password"],
+                admin_temp["new_phone"],
+                admin_temp["new_role"],
+                admin_temp["selected_cafe"],
+                admin_temp["selected_branch"]
+            )
+
+            clear_admin_state(cursor, conn, phone)
+
+            response = f"""
+        ✅ Usuario creado correctamente
+
+        👤 Usuario:
+        {admin_temp['new_username']}
+
+        📱 Teléfono:
+        {admin_temp['new_phone']}
+
+        🛡️ Rol:
+        {admin_temp['new_role']}
+        """
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "created"}), 200
         # =====================================================
         # NORMAL CUSTOMER FLOW
         # =====================================================
+        if master and admin_state:
+            return jsonify({"status": "admin flow active"}), 200
+
         customer = get_customer(cursor, phone)
         customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
 
@@ -1187,81 +1630,170 @@ def webhook():
                 msg += "✨ Sigue acumulando compras para tu próximo café gratis ☕"
 
                 response = msg + closing()
-
-        # REDIMIR
+        #--------------------------------------------------------------------
+        # REDIMIR RECOMPENSA
+        #--------------------------------------------------------------------
         elif text == "redimir":
             update_state(cursor, conn, customer_id, "redeem")
             response = "Envía código del cajero"
 
+        elif state == "redeem" and re.fullmatch(r"[A-F0-9]{8}", text.upper()):
+            conn.autocommit = False
 
+            try:
+                cursor.execute("""
+                    SELECT id, branch_id, cafe_id
+                    FROM cashier_codes
+                    WHERE code=%s
+                    AND expires_at > NOW()
+                    AND used=0
+                    FOR UPDATE
+                """, (text.upper(),))
 
-        elif state == "redeem" and text.isdigit():
+                code_data = cursor.fetchone()
 
-            cursor.execute("""
-
-                SELECT id, branch_id, cafe_id FROM cashier_codes
-
-                WHERE code=%s AND expires_at > NOW() AND used=0
-
-            """, (text,))
-
-            code_data = cursor.fetchone()
-
-            if not code_data:
-
-                response = "❌ Código inválido"
-
-            else:
-
-                reward = get_pending_reward(cursor, customer_id, code_data["branch_id"])
-
-                if not reward:
-
-                    response = "❌ Sin recompensa"
+                if not code_data:
+                    response = "❌ Código inválido"
+                    update_state(cursor, conn, customer_id, None)
+                    conn.commit()
 
                 else:
+                    reward = get_pending_reward(
+                        cursor,
+                        customer_id,
+                        code_data["branch_id"]
+                    )
 
-                    redeem_reward(cursor, conn, reward["id"])
+                    if not reward:
+                        response = "❌ Sin recompensa"
 
-                    mark_code_used(cursor, conn, code_data["id"])
+                    else:
+                        redeem_reward(
+                           cursor,
+                            conn,
+                            reward["id"]
+                        )
+                        mark_code_used(
+                            cursor,
+                            conn,
+                            code_data["id"]
+                        )
 
-                    response = "🎉 Café GRATIS aplicado" + closing()
+                        response = "🎉 Café GRATIS aplicado" + closing()
 
-            update_state(cursor, conn, customer_id, None)
+                    update_state(cursor, conn, customer_id, None)
 
+                    conn.commit()
+
+            except Exception as e:
+
+                conn.rollback()
+
+                print("❌ Redeem transaction error:", e)
+
+                response = "❌ Error procesando redención"
+
+            finally:
+
+                conn.autocommit = True
+
+        #---------------------------------------------------------------------------------
         # REGISTRAR COMPRA
-        elif text.isdigit() and state is None:
+        #---------------------------------------------------------------------------------
 
-            cursor.execute("""
-                SELECT id, branch_id, cafe_id FROM cashier_codes
-                WHERE code=%s AND expires_at > NOW() AND used=0
-                ORDER BY id DESC
-                LIMIT 1
-            """, (text,))
+        elif re.fullmatch(r"[A-F0-9]{8}", text.upper()) and state is None:
 
-            code_data = cursor.fetchone()
+            conn.autocommit = False
 
-            if not code_data:
-                response = "❌ Código inválido o usado"
-            else:
-                branch_id = code_data["branch_id"]
-                cafe_id = code_data["cafe_id"]
+            try:
 
-                create_purchase(cursor, conn, customer_id, branch_id, cafe_id)
-                mark_code_used(cursor, conn, code_data["id"])
+                cursor.execute("""
+                    SELECT id, branch_id, cafe_id
+                    FROM cashier_codes
+                    WHERE code=%s
+                    AND expires_at > NOW()
+                    AND used=0
+                    FOR UPDATE
+                    LIMIT 1
+                """, (text.upper(),))
 
-                total = count_current_cycle(cursor, customer_id, branch_id)
+                code_data = cursor.fetchone()
 
-                if total % 9 == 0:
-                    create_reward(cursor, conn, customer_id, branch_id, cafe_id)
-                    response = "🎉 Café gratis disponible" + closing()
+                if not code_data:
+
+                    response = "❌ Código inválido o usado"
+
+                    conn.commit()
+
                 else:
-                    faltan = 9 - (total % 9)
-                    if faltan == 9:
-                        faltan = 0
-                    response = f"☕ {total} compras. Te faltan {faltan}" + closing()
 
+                    branch_id = code_data["branch_id"]
+                    cafe_id = code_data["cafe_id"]
+
+                    create_purchase(
+                        cursor,
+                        conn,
+                        customer_id,
+                        branch_id,
+                        cafe_id
+                    )
+
+                    mark_code_used(
+                        cursor,
+                        conn,
+                        code_data["id"]
+                    )
+
+                    total = count_current_cycle(
+                        cursor,
+                        customer_id,
+                        branch_id
+                    )
+
+                    existing_reward = get_pending_reward(
+                        cursor,
+                        customer_id,
+                        branch_id
+                    )
+
+                    if total % 9 == 0 and not existing_reward:
+
+                        create_reward(
+                            cursor,
+                            conn,
+                            customer_id,
+                            branch_id,
+                            cafe_id
+                        )
+
+                        response = "🎉 Café gratis disponible" + closing()
+
+                    else:
+
+                        faltan = 9 - (total % 9)
+
+                        if faltan == 9:
+                            faltan = 0
+
+                        response = f"☕ {total} compras. Te faltan {faltan}" + closing()
+
+                    conn.commit()
+
+            except Exception as e:
+
+                conn.rollback()
+
+                print("❌ Purchase transaction error:", e)
+
+                response = "❌ Error procesando compra"
+
+            finally:
+
+                conn.autocommit = True
+
+        #--------------------------------------------------------------------------------
         # RESET
+        #--------------------------------------------------------------------------------
         elif text == "hola":
             update_state(cursor, conn, customer_id, None)
             response = """👋 ¡Bienvenido a el programa de recompensas! ☕
