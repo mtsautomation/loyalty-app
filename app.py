@@ -1092,6 +1092,7 @@ def webhook():
                 return jsonify({"status": "waiting"}), 200
 
             conn.autocommit = False
+            conn.start_transaction()
 
             try:
 
@@ -1650,13 +1651,14 @@ def webhook():
         # =====================================================
         # NORMAL CUSTOMER FLOW
         # =====================================================
-        if master and admin_state:
-            return jsonify({"status": "admin flow active"}), 200
-
         customer = get_customer(cursor, phone)
-        customer_id = customer["id"] if customer else create_customer(cursor, conn, phone)
+        if customer:
+            customer_id = customer["id"]
+            state = customer.get("state")
 
-        state = customer.get("state") if customer else None
+        else:
+            customer_id = create_customer(cursor, conn, phone)
+            state = None
 
         # STATUS + HISTORIAL
         if text in ["status", "puntos"]:
@@ -1696,6 +1698,7 @@ def webhook():
 
         elif state == "redeem" and re.fullmatch(r"[A-F0-9]{8}", text.upper()):
             conn.autocommit = False
+            conn.start_transaction()
 
             try:
                 cursor.execute("""
@@ -1761,6 +1764,7 @@ def webhook():
         elif re.fullmatch(r"[A-F0-9]{8}", text.upper()) and state is None:
 
             conn.autocommit = False
+            conn.start_transaction()
 
             try:
 
