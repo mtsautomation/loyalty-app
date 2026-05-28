@@ -469,7 +469,10 @@ def get_code():
         code = cursor.fetchone()
 
         if code:
-            remaining = int((code["expires_at"] - datetime.utcnow()).total_seconds())
+            remaining = max(
+                0,
+                int((code["expires_at"].replace(tzinfo=None) - datetime.utcnow()).total_seconds())
+            )
             return jsonify({
                 "code": code["code"],
                 "expires_in": max(0, remaining)

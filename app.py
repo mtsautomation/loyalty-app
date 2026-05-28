@@ -104,7 +104,7 @@ def create_customer(cursor, conn, phone):
         "INSERT INTO customers (phone, created_at, state) VALUES (%s, %s, %s)",
         (phone, datetime.utcnow(), None)
     )
-    conn.commit()
+
     return cursor.lastrowid
 
 def update_state(cursor, conn, customer_id, state):
@@ -112,7 +112,7 @@ def update_state(cursor, conn, customer_id, state):
         "UPDATE customers SET state=%s WHERE id=%s",
         (state, customer_id)
     )
-    conn.commit()
+
 
 def get_branch_by_code(cursor, code, cafe_id):
     cursor.execute("""
@@ -125,14 +125,23 @@ def mark_code_used(cursor, conn, code_id):
     cursor.execute("""
         UPDATE cashier_codes SET used = 1 WHERE id = %s
     """, (code_id,))
-    conn.commit()
+
 
 def create_purchase(cursor, conn, customer_id, branch_id, cafe_id):
     cursor.execute("""
-        INSERT INTO purchases (customer_id, branch_id, cafe_id, created_at)
-        VALUES (%s, %s, %s, %s)
-    """, (customer_id, branch_id, cafe_id, datetime.utcnow()))
-    conn.commit()
+        INSERT INTO purchases (
+            customer_id,
+            branch_id,
+            cafe_id,
+            created_at
+        )
+        VALUES (%s,%s,%s,%s)
+    """, (
+        customer_id,
+        branch_id,
+        cafe_id,
+        datetime.utcnow()
+    ))
 
 def count_current_cycle(cursor, customer_id, branch_id):
     cursor.execute("""
@@ -182,7 +191,7 @@ def create_reward(cursor, conn, customer_id, branch_id, cafe_id):
         INSERT INTO rewards (customer_id, branch_id, cafe_id, status)
         VALUES (%s, %s, %s, 'pending')
     """, (customer_id, branch_id, cafe_id))
-    conn.commit()
+
 
 def get_pending_reward(cursor, customer_id, branch_id):
     cursor.execute("""
@@ -197,7 +206,7 @@ def redeem_reward(cursor, conn, reward_id):
         UPDATE rewards SET status='redeemed', redeemed_at=%s
         WHERE id=%s
     """, (datetime.utcnow(), reward_id))
-    conn.commit()
+
 
 def closing():
     return "\n\n👉 Para registrar otra compra escribe *hola*"
@@ -271,7 +280,7 @@ def save_admin_state(cursor, conn, phone, state, temp_data=None):
             datetime.utcnow()
         ))
 
-    conn.commit()
+
 
 def clear_admin_state(cursor, conn, phone):
 
@@ -280,7 +289,7 @@ def clear_admin_state(cursor, conn, phone):
         WHERE phone=%s
     """, (phone,))
 
-    conn.commit()
+
 
 # =====================================================
 # CREATE CAFE
@@ -296,7 +305,7 @@ def create_cafe(cursor, conn, name):
         datetime.utcnow()
     ))
 
-    conn.commit()
+
 
     return cursor.lastrowid
 
@@ -342,7 +351,7 @@ def create_branch(
         datetime.utcnow()
     ))
 
-    conn.commit()
+
 
     return cursor.lastrowid
 
@@ -385,7 +394,7 @@ def create_user(
         datetime.utcnow()
     ))
 
-    conn.commit()
+
 # -------------------------
 # 🔐 ACTIVE CODE
 # -------------------------
@@ -1082,31 +1091,79 @@ def webhook():
 
                 return jsonify({"status": "waiting"}), 200
 
-            # CREATE CAFE
-            cafe_id = create_cafe(
-                cursor,
-                conn,
-                admin_temp["cafe_name"]
-            )
+            conn.autocommit = False
 
-            # CREATE BRANCHES
-            first_branch_id = None
+            try:
 
-            for branch in admin_temp["branches"]:
-
-                new_branch_id = create_branch(
+                cafe_id = create_cafe(
                     cursor,
                     conn,
-                    cafe_id,
-                    branch["name"],
-                    branch["address"],
-                    branch.get("street"),
-                    branch.get("neighborhood"),
-                    branch.get("zip_code")
+                    admin_temp["cafe_name"]
                 )
 
-                if first_branch_id is None:
-                    first_branch_id = new_branch_id
+                first_branch_id = None
+
+                for branch in admin_temp["branches"]:
+
+                    new_branch_id = create_branch(
+                        cursor,
+                        conn,
+                        cafe_id,
+                        branch["name"],
+                        branch["address"],
+                        branch.get("street"),
+                        branch.get("neighborhood"),
+                        branch.get("zip_code")
+                    )
+
+                    if first_branch_id is None:
+                        first_branch_id = new_branch_id
+
+                create_user(
+                    cursor,
+                    conn,
+                    admin_temp["admin_username"],
+                    admin_temp["admin_password"],
+                    admin_temp["admin_phone"],
+                    admin_temp["role"],
+                    cafe_id,
+                    first_branch_id
+                )
+
+                clear_admin_state(cursor, conn, phone)
+
+                conn.commit()
+
+                response = f"""
+        ✅ Cafetería creada
+
+        ☕ {admin_temp['cafe_name']}
+
+        🏢 Sucursales creadas:
+        {len(admin_temp['branches'])}
+
+        👤 Usuario:
+        {admin_temp['admin_username']}
+
+        🛡️ Rol:
+        {admin_temp['role']}
+        """
+
+            except Exception as e:
+
+                conn.rollback()
+
+                print("❌ CREATE CAFE ERROR:", e)
+
+                response = "❌ Error creando cafetería"
+
+            finally:
+
+                conn.autocommit = True
+
+            send_whatsapp(phone, response)
+
+            return jsonify({"status": "created"}), 200
 
             # CREATE USER
             create_user(
