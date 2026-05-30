@@ -104,7 +104,7 @@ def create_customer(cursor, conn, phone):
         "INSERT INTO customers (phone, created_at, state) VALUES (%s, %s, %s)",
         (phone, datetime.utcnow(), None)
     )
-
+    conn.commit()
     return cursor.lastrowid
 
 def update_state(cursor, conn, customer_id, state):
@@ -112,6 +112,8 @@ def update_state(cursor, conn, customer_id, state):
         "UPDATE customers SET state=%s WHERE id=%s",
         (state, customer_id)
     )
+
+    conn.commit()
 
 
 def get_branch_by_code(cursor, code, cafe_id):
@@ -280,7 +282,7 @@ def save_admin_state(cursor, conn, phone, state, temp_data=None):
             datetime.utcnow()
         ))
 
-
+    conn.commit()
 
 def clear_admin_state(cursor, conn, phone):
 
@@ -289,7 +291,7 @@ def clear_admin_state(cursor, conn, phone):
         WHERE phone=%s
     """, (phone,))
 
-
+    conn.commit()
 
 # =====================================================
 # CREATE CAFE
@@ -352,7 +354,6 @@ def create_branch(
     ))
 
 
-
     return cursor.lastrowid
 
 # =====================================================
@@ -393,6 +394,7 @@ def create_user(
         branch_id,
         datetime.utcnow()
     ))
+
 
 
 # -------------------------
