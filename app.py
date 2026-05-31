@@ -1101,6 +1101,10 @@ def webhook():
         # FINAL CONFIRMATION
         # ---------------------------------
         elif master and admin_state == "confirm_create":
+            print("ENTERED CONFIRM_CREATE")
+
+            print("AUTOCOMMIT:", conn.autocommit)
+            print("IN_TRANSACTION:", conn.in_transaction)
 
             if text != "confirmar":
                 send_whatsapp(
@@ -1111,6 +1115,7 @@ def webhook():
                 return jsonify({"status": "waiting"}), 200
 
             conn.autocommit = False
+            print("AFTER AUTOCOMMIT FALSE")
             print("IN_TRANSACTION:", conn.in_transaction)
             conn.start_transaction()
 
