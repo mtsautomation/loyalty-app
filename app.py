@@ -291,7 +291,6 @@ def clear_admin_state(cursor, conn, phone):
         WHERE phone=%s
     """, (phone,))
 
-    conn.commit()
 
 # =====================================================
 # CREATE CAFE
@@ -670,6 +669,8 @@ def webhook():
 
             clear_admin_state(cursor, conn, phone)
 
+            conn.commit()
+
             response = "❌ Flujo cancelado"
 
             send_whatsapp(phone, response)
@@ -729,7 +730,7 @@ def webhook():
 
                 return jsonify({"status": "duplicate cafe"}), 200
 
-            admin_temp["cafe_name"] = text
+            admin_temp["cafe_name"] = raw_text
 
             save_admin_state(
                 cursor,
@@ -793,7 +794,7 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_branch_name":
 
-            admin_temp["temp_branch_name"] = text
+            admin_temp["temp_branch_name"] = raw_text
 
             save_admin_state(
                 cursor,
@@ -852,14 +853,30 @@ def webhook():
 
             return jsonify({"status": "ok"}), 200
 
+
         elif master and admin_state == "await_branch_zipcode":
+
+            if not raw_text.isdigit():
+                send_whatsapp(
+
+                    phone,
+
+                    "❌ Código postal inválido"
+
+                )
+
+                return jsonify({"status": "invalid zip"}), 200
 
             admin_temp["temp_zipcode"] = raw_text
 
             full_address = f"""
+
         Calle: {admin_temp['temp_street']}
+
         Colonia: {admin_temp['temp_neighborhood']}
+
         CP: {admin_temp['temp_zipcode']}
+
         """
 
             branch_data = {
@@ -1122,6 +1139,10 @@ def webhook():
                     if first_branch_id is None:
                         first_branch_id = new_branch_id
 
+                print("CAFE ID:", cafe_id)
+                print("BRANCHES:", admin_temp["branches"])
+                print("FIRST BRANCH:", first_branch_id)
+
                 create_user(
                     cursor,
                     conn,
@@ -1163,39 +1184,6 @@ def webhook():
             finally:
 
                 conn.autocommit = True
-
-            send_whatsapp(phone, response)
-
-            return jsonify({"status": "created"}), 200
-
-            # CREATE USER
-            create_user(
-                cursor,
-                conn,
-                admin_temp["admin_username"],
-                admin_temp["admin_password"],
-                admin_temp["admin_phone"],
-                admin_temp["role"],
-                cafe_id,
-                first_branch_id
-            )
-
-            clear_admin_state(cursor, conn, phone)
-
-            response = f"""
-        ✅ Cafetería creada
-
-        ☕ {admin_temp['cafe_name']}
-
-        🏢 Sucursales creadas:
-        {len(admin_temp['branches'])}
-
-        👤 Usuario:
-        {admin_temp['admin_username']}
-
-        🛡️ Rol:
-        {admin_temp['role']}
-        """
 
             send_whatsapp(phone, response)
 
@@ -1268,6 +1256,23 @@ def webhook():
 
             cafe_id = int(text)
 
+            cursor.execute("""
+                SELECT id, name
+                FROM cafes
+                WHERE id=%s
+                LIMIT 1
+            """, (cafe_id,))
+
+            cafe = cursor.fetchone()
+
+            if not cafe:
+                send_whatsapp(
+                    phone,
+                    "❌ Cafetería no encontrada"
+                )
+
+                return jsonify({"status": "not found"}), 200
+
             admin_temp["upgrade_cafe_id"] = cafe_id
 
             save_admin_state(
@@ -1290,7 +1295,7 @@ def webhook():
         # ---------------------------------
         elif master and admin_state == "await_new_branch_name":
 
-            admin_temp["new_branch_name"] = text
+            admin_temp["new_branch_name"] = raw_text
 
             save_admin_state(
                 cursor,
@@ -1321,6 +1326,8 @@ def webhook():
             )
 
             clear_admin_state(cursor, conn, phone)
+
+            conn.commit()
 
             response = f"""
         ✅ Nueva sucursal agregada
@@ -1633,6 +1640,8 @@ def webhook():
             )
 
             clear_admin_state(cursor, conn, phone)
+
+            conn.commit()
 
             response = f"""
         ✅ Usuario creado correctamente
