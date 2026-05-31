@@ -1111,6 +1111,7 @@ def webhook():
                 return jsonify({"status": "waiting"}), 200
 
             conn.autocommit = False
+            print("IN_TRANSACTION:", conn.in_transaction)
             conn.start_transaction()
 
             try:
