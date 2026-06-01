@@ -291,6 +291,7 @@ def clear_admin_state(cursor, conn, phone):
         WHERE phone=%s
     """, (phone,))
 
+    conn.commit()
 
 # =====================================================
 # CREATE CAFE
@@ -351,7 +352,6 @@ def create_branch(
         state_name,
         datetime.utcnow()
     ))
-
 
     return cursor.lastrowid
 
@@ -1100,23 +1100,36 @@ def webhook():
         # ---------------------------------
         # FINAL CONFIRMATION
         # ---------------------------------
+
         elif master and admin_state == "confirm_create":
+
             print("ENTERED CONFIRM_CREATE")
 
             print("AUTOCOMMIT:", conn.autocommit)
-            print("IN_TRANSACTION:", conn.in_transaction)
+
+            print("IN_TRANSACTION BEFORE:", conn.in_transaction)
+
+            if conn.in_transaction:
+                print("COMMITTING PREVIOUS TRANSACTION")
+                conn.commit()
 
             if text != "confirmar":
                 send_whatsapp(
+
                     phone,
+
                     "❌ Debes escribir confirmar o cancelar"
+
                 )
 
                 return jsonify({"status": "waiting"}), 200
 
             conn.autocommit = False
+
             print("AFTER AUTOCOMMIT FALSE")
+
             print("IN_TRANSACTION:", conn.in_transaction)
+
             conn.start_transaction()
 
             try:
