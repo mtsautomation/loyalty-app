@@ -1727,7 +1727,7 @@ def webhook():
 
         elif state == "redeem" and re.fullmatch(r"[A-F0-9]{8}", text.upper()):
             conn.autocommit = False
-            conn.start_transaction()
+
 
             try:
                 cursor.execute("""
@@ -1793,7 +1793,7 @@ def webhook():
         elif re.fullmatch(r"[A-F0-9]{8}", text.upper()) and state is None:
 
             conn.autocommit = False
-            conn.start_transaction()
+            # conn.start_transaction()
 
             try:
 
