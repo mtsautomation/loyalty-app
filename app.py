@@ -308,7 +308,6 @@ def create_cafe(cursor, conn, name):
     ))
 
 
-
     return cursor.lastrowid
 
 # =====================================================
