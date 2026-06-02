@@ -1804,7 +1804,7 @@ def webhook():
                     AND expires_at > NOW()
                     AND used=0
                     FOR UPDATE
-                    LIMIT 1
+                    
                 """, (text.upper(),))
 
                 code_data = cursor.fetchone()
