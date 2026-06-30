@@ -170,12 +170,30 @@ def get_last_redeem(cursor, customer_id, branch_id):
 
     return cursor.fetchone()
 def get_all_points(cursor, customer_id):
+
     cursor.execute("""
-        SELECT branch_id, COUNT(*) as total
-        FROM purchases
-        WHERE customer_id=%s
-        GROUP BY branch_id
+        SELECT
+            p.cafe_id,
+            c.name AS cafe_name,
+            p.branch_id,
+            b.name AS branch_name,
+            COUNT(*) AS total
+        FROM purchases p
+        INNER JOIN cafes c
+            ON p.cafe_id = c.id
+        INNER JOIN branches b
+            ON p.branch_id = b.id
+        WHERE p.customer_id=%s
+        GROUP BY
+            p.cafe_id,
+            c.name,
+            p.branch_id,
+            b.name
+        ORDER BY
+            c.name,
+            b.name
     """, (customer_id,))
+
     return cursor.fetchall()
 
 def get_purchase_history(cursor, customer_id):
@@ -1699,12 +1717,21 @@ def webhook():
                 msg = "📊 Tus compras anteriores:\n\n"
 
                 for r in rows:
-                    branch_id = r["branch_id"]
 
-                    total_actual = count_current_cycle(cursor, customer_id, branch_id)
-                    ultimo = get_last_redeem(cursor, customer_id, branch_id)
+                    total_actual = count_current_cycle(
+                        cursor,
+                        customer_id,
+                        r["branch_id"]
+                    )
 
-                    msg += f"📍 Sucursal {branch_id}\n"
+                    ultimo = get_last_redeem(
+                        cursor,
+                        customer_id,
+                        r["branch_id"]
+                    )
+
+                    msg += f"☕ {r['cafe_name']}\n"
+                    msg += f"📍 {r['branch_name']}\n"
                     msg += f"☕ Progreso actual: {total_actual}/9\n"
 
                     if ultimo and ultimo["redeemed_at"]:

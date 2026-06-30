@@ -105,14 +105,16 @@ def login():
     }
 
     .card{
-        background:rgba(37,53,50,0.6);
-        backdrop-filter:blur(20px);
-        padding:45px;
-        border-radius:22px;
-        width:90%;
-        max-width:380px;
-        border:1px solid rgba(255,255,255,0.05);
-        animation:fade .7s ease;
+        background:rgba(37,53,50,0.7);
+        backdrop-filter:blur(25px);
+        padding:50px;
+        border-radius:25px;
+        text-align:center;
+        border:1px solid rgba(255,255,255,0.06);
+        animation:fade .6s ease;
+
+        width:min(90vw, 600px);
+        box-sizing:border-box;
     }
 
     @keyframes fade{
@@ -341,11 +343,17 @@ def cashier():
     }
 
     #code{
-        font-size:90px;
-        letter-spacing:16px;
+        font-size:clamp(32px, 12vw, 90px);
+        letter-spacing:clamp(2px, 1vw, 16px);
         margin:30px 0;
         color:#f5f5f5;
         transition:.25s;
+
+        width:100%;
+        overflow-wrap:anywhere;
+        word-break:break-word;
+        text-align:center;
+        line-height:1.1;
     }
 
     #timer{
