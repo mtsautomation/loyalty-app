@@ -49,13 +49,14 @@ def login():
 
     if request.method == "POST":
         username = request.form.get("username").lower().strip()
-
+        print("USERNAME:", repr(username))
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
-
+        cursor.execute("SELECT username FROM users")
+        print(cursor.fetchall())
         cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
         user = cursor.fetchone()
-
+        print("USER:", user)
         if not user:
             cursor.close()
             conn.close()
